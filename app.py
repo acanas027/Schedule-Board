@@ -552,6 +552,32 @@ def update_item(item: dict, changes: dict, user: str, action: str) -> bool:
     return True
 
 
+def move_item(item: dict, to_line: str, first: bool, target: pd.DataFrame, user: str) -> bool:
+    """Move a recipe (with its status, reason and comment) to another line — first or last in that line."""
+    s = store()
+    tab = sched_tab(date.fromisoformat(item["date"]))
+    ids = s.col_values(tab)
+    if item["id"] not in ids:
+        refresh()
+        flash("That recipe was removed or changed by someone else — board refreshed.", "warn")
+        return False
+    col = {c: SCHED_COLS.index(c) + 1 for c in SCHED_COLS}
+    cells = []
+    if first:
+        seq = 1
+        for e in target.to_dict("records"):  # push the line's recipes down one
+            if e["id"] in ids:
+                cells.append((ids.index(e["id"]) + 1, col["seq"], int(e["_seq"]) + 1))
+    else:
+        seq = int(target["_seq"].max()) + 1 if len(target) else 1
+    r, t = ids.index(item["id"]) + 1, stamp()
+    cells += [(r, col["line"], to_line), (r, col["seq"], seq), (r, col["updated_by"], user), (r, col["updated_at"], t)]
+    s.update_cells(tab, cells)
+    write_logs([item_log(item, f"moved to {LINE_LABEL[to_line]}", user)])
+    refresh()
+    return True
+
+
 def new_item(d: date, shift: str, line: str, seq: int, recipe: str, qty: str, user: str, t: str) -> dict:
     return {"id": uuid.uuid4().hex[:10], "date": d.isoformat(), "shift": shift, "line": line, "seq": seq,
             "recipe": recipe, "qty": qty, "status": "Ready", "reason": "", "comment": "", "deleted": False,
@@ -1050,8 +1076,8 @@ def down_dialog() -> None:
         st.rerun()
 
 
-def item_row(it: dict, user: str) -> None:
-    c1, c2, c3 = st.columns([2.2, 6, 2], vertical_alignment="center")
+def item_row(it: dict, user: str, items: pd.DataFrame) -> None:
+    c1, c2, c3, c4 = st.columns([1.6, 6.4, 1.7, 1.2], vertical_alignment="center")
     c1.markdown(f"**{it['recipe']}**" + (f" ×{it['qty']}" if it["qty"] else "") + (" ↪" if truthy(it["carried"]) else ""))
     sub = " · ".join(x for x in (it["reason"], it["comment"]) if x)
     if sub:
@@ -1076,6 +1102,19 @@ def item_row(it: dict, user: str) -> None:
                     return
                 if safe(update_item, it, {"reason": reason or "", "comment": comment.strip()}, user, "note"):
                     flash(f"Comments saved on {it['recipe']}")
+                st.rerun()
+    with c4.popover("↔ Move", help="Move this recipe to another line"):
+        with st.form(f"move_{it['id']}_{it['updated_at']}", border=False):
+            st.markdown(f"**Move {it['recipe']}** from {LINE_LABEL.get(it['line'], it['line'])}")
+            to = st.selectbox("To line", [ln for ln in LINE_IDS if ln != it["line"]], index=None,
+                              format_func=LINE_LABEL.get, placeholder="Pick a line")
+            first = st.radio("Put it", ["Last in line", "First in line"], horizontal=True) == "First in line"
+            if st.form_submit_button("Move", type="primary"):
+                if not to:
+                    st.error("Pick a line.")
+                    return
+                if safe(move_item, it, to, first, items[items["line"] == to], user):
+                    flash(f"{it['recipe']} moved to {LINE_LABEL[to]}")
                 st.rerun()
 
 
@@ -1232,7 +1271,7 @@ def lead_page() -> None:
             h2.toggle("Line down", value=f.get("down", False), key=dk,
                       on_change=on_toggle_down, args=(d, shift, line, dk, flags, u["name"]))
             for it in li.to_dict("records"):
-                item_row(it, u["name"])
+                item_row(it, u["name"], items)
             with st.form(f"add_{line}_{d}_{shift}", clear_on_submit=True, border=False):
                 a1, a2 = st.columns([5, 1], vertical_alignment="bottom")
                 txt = a1.text_input("Add recipe", placeholder="Add recipe — e.g. PO 379 or CS 131 x6",
