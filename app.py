@@ -36,32 +36,32 @@ LINE_ORDER = {i: n for n, i in enumerate(LINE_IDS)}
 GRID_LINES = [i for i, _, a in LINES if a in ("top", "bottom")]
 SIDE_LINES = [i for i, _, a in LINES if a == "side"]
 
-STATUSES = ["No material", "Ready", "Next", "Running", "Finished"]
-ICON = {"No material": "🔴", "Ready": "⚪", "Next": "🟡", "Running": "🟢", "Finished": "✅"}
+STATUSES = ["Not ready", "Ready", "Next", "Running", "Finished"]
+ICON = {"Not ready": "🔴", "Ready": "⚪", "Next": "🟡", "Running": "🟢", "Finished": "✅"}
 STATUS_STYLE = {  # background, border, text, tag
-    "No material": ("#fde4e2", "#d93025", "#a50e0e", "NO MATERIAL"),
+    "Not ready": ("#fde4e2", "#d93025", "#a50e0e", "NOT READY"),
     "Ready": ("#ffffff", "#c3c9d2", "#1f2a37", "READY"),
     "Next": ("#fff3cd", "#e6a700", "#7a5600", "NEXT"),
     "Running": ("#dcf5e3", "#188038", "#0d5223", "RUNNING"),
     "Finished": ("#eceff3", "#c3c9d2", "#7a8594", "DONE"),
 }
-REASONS = ["", "No material", "Short staffed", "Mechanical / downtime", "QA hold",
-           "Changeover / sanitation", "Schedule change", "Ran out of time", "Other"]
+REASONS = ["Ran out of time", "Mechanical issues", "Rework other product", "No material", "Short staffed"]
 
 SHIFTS = ["1st", "2nd"]                 # in start-time order
 SHIFT_START = {"1st": 5, "2nd": 15}     # hour (24h) each shift starts
 PLANNER_ROLES = ("planner", "admin")
 REFRESH_SECONDS = 15                    # board auto-refresh
 CACHE_SECONDS = 10                      # shared read cache (protects Sheets quota)
-FLAG_KEYS = ("down", "priority", "hand_pack")
+FLAG_KEYS = ("down", "priority")
 
 # Sheet tabs (schedule_YYYY_MM and log_YYYY_MM are created per month)
 SCHED_COLS = ["id", "date", "shift", "line", "seq", "recipe", "qty", "status", "reason", "comment",
-              "deleted", "created_by", "created_at", "updated_by", "updated_at", "started_at", "finished_at"]
+              "deleted", "created_by", "created_at", "updated_by", "updated_at", "started_at", "finished_at",
+              "carried", "carried_from"]
 LOG_COLS = ["ts", "date", "shift", "line", "item_id", "recipe", "action", "from_status", "to_status",
             "reason", "comment", "user"]
-LINEDAY_COLS = ["key", "date", "shift", "line", "down", "priority", "hand_pack", "updated_by", "updated_at"]
-BOARD_COLS = ["key", "date", "shift", "notes", "updated_by", "updated_at"]
+LINEDAY_COLS = ["key", "date", "shift", "line", "down", "priority", "updated_by", "updated_at"]
+BOARD_COLS = ["key", "date", "shift", "notes", "updated_by", "updated_at", "closed_by", "closed_at", "carried_count"]
 GOAL_COLS = ["label", "value"]
 LEAD_COLS = ["name", "pin", "role", "lines", "active"]
 CORE = {"lineday": LINEDAY_COLS, "boards": BOARD_COLS, "goals": GOAL_COLS, "leads": LEAD_COLS}
@@ -113,6 +113,15 @@ def current_board(at: datetime | None = None) -> tuple[date, str]:
 def prev_slot(d: date, shift: str) -> tuple[date, str]:
     i = SHIFTS.index(shift)
     return (d, SHIFTS[i - 1]) if i > 0 else (d - timedelta(days=1), SHIFTS[-1])
+
+
+def next_slot(d: date, shift: str) -> tuple[date, str]:
+    i = SHIFTS.index(shift)
+    return (d, SHIFTS[i + 1]) if i < len(SHIFTS) - 1 else (d + timedelta(days=1), SHIFTS[0])
+
+
+def slot_label(d: date, shift: str) -> str:
+    return f"{d:%a %b} {d.day} · {shift} shift"
 
 
 def parse_entries(text: str) -> list[tuple[str, str]]:
@@ -299,8 +308,7 @@ DEMO_BOARD = {  # from the whiteboard photo
     "C1": ["CI 70", "CI 65"], "C2": ["CI 39"], "VX": ["CI 86", "CI 37"],
 }
 DEMO_PROGRESS = {"L2": 2, "L4": 1, "L7": 3, "L8": 2, "L9": 2, "L14": 3, "CS": 1, "C1": 1, "L11": 1, "L16": 1}
-DEMO_NOTES = ("High protein items: PT 468 – 2nd, PT 469 – can run\n"
-              "Hand pack – Lines 1, 10, 17, 18 (1st shift)\n\n"
+DEMO_NOTES = ("High protein items: PT 468 – 2nd, PT 469 – can run\n\n"
               "We don't have time to touch product twice. We need to do it right the first time!")
 
 
@@ -318,7 +326,7 @@ def demo_store() -> MemoryStore:
                       "Next" if seq == done + 2 else "Ready") if done >= 0 else "Ready"
             reason = comment = ""
             if line == "L9" and rec == "PO 418":
-                status, reason, comment = "No material", "No material", "Waiting on material"
+                status, reason, comment = "Not ready", "No material", "Waiting on material"
             if line == "L11" and rec == "PO 219":
                 comment = "Out of box lids"
             upd = start
@@ -327,15 +335,15 @@ def demo_store() -> MemoryStore:
                 upd = ts(max(minute, 2))
             rows.append([uuid.uuid4().hex[:10], d.isoformat(), shift, line, seq, rec, qty, status, reason, comment,
                          False, "Demo Planner", start, "Demo Lead" if upd != start else "Demo Planner", upd,
-                         upd if status in ("Running", "Finished") else "", upd if status == "Finished" else ""])
+                         upd if status in ("Running", "Finished") else "", upd if status == "Finished" else "",
+                         "", ""])
     s.ensure(sched_tab(d), SCHED_COLS, seed=rows)
     s.ensure("leads", LEAD_COLS, seed=[["Demo Lead", "1111", "lead", "ALL", True],
                                        ["Demo Planner", "2222", "planner", "ALL", True]])
     s.ensure("goals", GOAL_COLS, seed=DEFAULT_GOALS)
     s.ensure("lineday", LINEDAY_COLS, seed=[
-        [line_key(d, shift, ln), d.isoformat(), shift, ln, ln in ("L17", "L18"), ln == "L9", True, "Demo Planner", start]
-        for ln in ("L1", "L10", "L17", "L18")] + [
-        [line_key(d, shift, "L9"), d.isoformat(), shift, "L9", False, True, False, "Demo Planner", start]])
+        [line_key(d, shift, ln), d.isoformat(), shift, ln, ln in ("L17", "L18"), ln == "L9", "Demo Planner", start]
+        for ln in ("L9", "L17", "L18")])
     s.ensure("boards", BOARD_COLS, seed=[[board_key(d, shift), d.isoformat(), shift, DEMO_NOTES, "Demo Planner", start]])
     return s
 
@@ -413,11 +421,22 @@ def line_flags(lineday: pd.DataFrame, d: date, shift: str) -> dict[str, dict]:
     return out
 
 
-def board_notes(boards: pd.DataFrame, d: date, shift: str) -> str:
+def board_row(boards: pd.DataFrame, d: date, shift: str) -> dict:
     if boards.empty:
-        return ""
+        return {}
     m = boards[boards["key"] == board_key(d, shift)]
-    return str(m.iloc[-1]["notes"]) if not m.empty else ""
+    return m.iloc[-1].to_dict() if not m.empty else {}
+
+
+def board_notes(boards: pd.DataFrame, d: date, shift: str) -> str:
+    return str(board_row(boards, d, shift).get("notes", ""))
+
+
+def closed_text(row: dict) -> str:
+    if not row.get("closed_at"):
+        return ""
+    t = datetime.strptime(row["closed_at"], "%Y-%m-%d %H:%M:%S")
+    return f"Shift ended {t:%-I:%M %p} by {row.get('closed_by', '')} — {row.get('carried_count') or 0} carried to next shift"
 
 
 def month_range(a: date, b: date) -> list[str]:
@@ -475,7 +494,7 @@ def new_item(d: date, shift: str, line: str, seq: int, recipe: str, qty: str, us
     return {"id": uuid.uuid4().hex[:10], "date": d.isoformat(), "shift": shift, "line": line, "seq": seq,
             "recipe": recipe, "qty": qty, "status": "Ready", "reason": "", "comment": "", "deleted": False,
             "created_by": user, "created_at": t, "updated_by": user, "updated_at": t,
-            "started_at": "", "finished_at": ""}
+            "started_at": "", "finished_at": "", "carried": False, "carried_from": ""}
 
 
 def add_items(d: date, shift: str, line: str, entries, user: str, start_seq: int) -> bool:
@@ -532,15 +551,67 @@ def upsert(tab: str, cols: list[str], rows: list[dict]) -> None:
     s = store()
     s.ensure(tab, cols)
     idx = {k: i + 1 for i, k in enumerate(s.col_values(tab))}
-    upd, new = [], []
+    cells, new = [], []
     for row in rows:
-        vals = [row.get(c, "") for c in cols]
-        if row["key"] in idx:
-            upd.append((idx[row["key"]], vals))
+        if row["key"] in idx:  # existing row: only touch the fields given
+            cells += [(idx[row["key"]], cols.index(k) + 1, v) for k, v in row.items() if k in cols and k != "key"]
         else:
-            new.append(vals)
-    s.update_rows(tab, upd)
+            new.append([row.get(c, "") for c in cols])
+    s.update_cells(tab, cells)
     s.append(tab, new)
+
+
+def carry_over(d: date, shift: str, items: pd.DataFrame, answers: dict, user: str) -> tuple[int, date, str]:
+    """End of shift: save reasons, copy every unfinished recipe (with its data) to the top of the next board."""
+    nd, ns = next_slot(d, shift)
+    s = store()
+    src, dst = sched_tab(d), sched_tab(nd)
+    s.ensure(src, SCHED_COLS)
+    s.ensure(dst, SCHED_COLS)
+    refresh()
+    col = {c: SCHED_COLS.index(c) + 1 for c in SCHED_COLS}
+    t = stamp()
+    src_rows = {v: i + 1 for i, v in enumerate(s.col_values(src))}
+    dst_rows = src_rows if dst == src else {v: i + 1 for i, v in enumerate(s.col_values(dst))}
+    nxt = board_items(load_sched(mk(nd)), nd, ns)
+    src_cells, dst_cells, new_rows, logs = [], [], [], []
+    for line in LINE_IDS:
+        li = items[items["line"] == line] if not items.empty else items
+        if li.empty:
+            continue
+        n = len(li)
+        if not nxt.empty:  # push what's already planned on the next board below the carry-over
+            for e in nxt[nxt["line"] == line].to_dict("records"):
+                if e["id"] in dst_rows:
+                    dst_cells.append((dst_rows[e["id"]], col["seq"], int(e["_seq"]) + n))
+        for seq, it in enumerate(li.to_dict("records"), 1):
+            reason, comment = answers[it["id"]]
+            r = src_rows.get(it["id"])
+            if r:
+                src_cells += [(r, col["reason"], reason), (r, col["comment"], comment), (r, col["carried"], True)]
+            logs.append(item_log(it, "carried over", user, reason=reason, comment=comment))
+            row = new_item(nd, ns, line, seq, it["recipe"], it["qty"], user, t)
+            row.update(status=it["status"], reason=reason, comment=comment, carried_from=it["id"],
+                       started_at=t if it["status"] == "Running" else "")
+            new_rows.append(row)
+    s.update_cells(src, src_cells)
+    s.update_cells(dst, dst_cells)
+    s.append(dst, [[row[c] for c in SCHED_COLS] for row in new_rows])
+    write_logs(logs)
+    # line flags + notes follow the board unless the next board already has its own
+    core = load_core()
+    flags, nflags = line_flags(core["lineday"], d, shift), line_flags(core["lineday"], nd, ns)
+    desired = {**{ln: f for ln, f in flags.items()}, **nflags}
+    save_flags(nd, ns, desired, nflags, user)
+    notes, nrow = board_notes(core["boards"], d, shift), board_row(core["boards"], nd, ns)
+    rows = [{"key": board_key(d, shift), "date": d.isoformat(), "shift": shift, "closed_by": user, "closed_at": t,
+             "carried_count": int(str(board_row(core["boards"], d, shift).get("carried_count") or 0) or 0) + len(new_rows)}]
+    if notes and not nrow.get("notes"):
+        rows.append({"key": board_key(nd, ns), "date": nd.isoformat(), "shift": ns, "notes": notes,
+                     "updated_by": user, "updated_at": t})
+    upsert("boards", BOARD_COLS, rows)
+    refresh()
+    return len(new_rows), nd, ns
 
 
 def save_flags(d: date, shift: str, desired: dict, current: dict, user: str) -> None:
@@ -584,7 +655,7 @@ BOARD_CSS = """<style>
 .cnt{font-size:11px;color:#5f6b7a;font-weight:700}
 .badges{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:2px}
 .badge{font-size:9.5px;font-weight:800;border-radius:3px;padding:1px 5px;letter-spacing:.03em;color:#fff}
-.badge.prio{background:#c62828}.badge.hp{background:#1a56db}
+.badge.prio{background:#c62828}
 .downx{font-size:20px;font-weight:900;color:#9aa3ae;text-align:center;padding:16px 0 6px}
 .item{display:flex;justify-content:space-between;align-items:center;gap:4px;border:1.5px solid;border-radius:6px;padding:3px 6px;margin-top:4px;font-weight:700;font-size:14px;line-height:1.25}
 .item .tag{font-size:8.5px;font-weight:800;letter-spacing:.05em;white-space:nowrap}
@@ -627,8 +698,7 @@ def _card(line: str, items: pd.DataFrame, flags: dict) -> str:
     n, done = len(li), int((li["status"] == "Finished").sum()) if len(li) else 0
     out = [f'<div class="{cls}"><div class="ch"><span class="lbl">{e(LINE_LABEL[line])}</span>'
            f'{f"<span class=cnt>{done}/{n}</span>" if n else ""}</div>']
-    badges = ('<span class="badge prio">★ PRIORITY</span>' if f.get("priority") else "") + \
-             ('<span class="badge hp">HAND PACK</span>' if f.get("hand_pack") else "")
+    badges = '<span class="badge prio">★ PRIORITY</span>' if f.get("priority") else ""
     if badges:
         out.append(f'<div class="badges">{badges}</div>')
     if f.get("down"):
@@ -638,7 +708,7 @@ def _card(line: str, items: pd.DataFrame, flags: dict) -> str:
         bg, bd, fg, tag = STATUS_STYLE[status]
         qty = f' <span class="qty">×{e(it["qty"])}</span>' if it["qty"] else ""
         out.append(f'<div class="item s-{status.lower().replace(" ", "-")}" style="background:{bg};border-color:{bd};color:{fg}">'
-                   f'<span class="rec">{e(it["recipe"])}{qty}</span><span class="tag">{tag}</span></div>')
+                   f'<span class="rec">{e(it["recipe"])}{qty}</span><span class="tag">{tag}{" ↪" if truthy(it["carried"]) else ""}</span></div>')
         sub = ([f"<b>{e(it['reason'])}</b>"] if it["reason"] else []) + ([e(it["comment"])] if it["comment"] else [])
         if sub:
             out.append(f'<div class="cmt">{" · ".join(sub)}</div>')
@@ -648,19 +718,22 @@ def _card(line: str, items: pd.DataFrame, flags: dict) -> str:
     return "".join(out)
 
 
-def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: str, goals: pd.DataFrame, tv: bool) -> str:
+def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: str, goals: pd.DataFrame, tv: bool,
+                 closed: str = "") -> str:
     e = html.escape
     st_counts = items["status"].value_counts() if not items.empty else pd.Series(dtype=int)
     total = len(items)
     kpis = [("Finished", f"✅ {int(st_counts.get('Finished', 0))}/{total} done"),
             ("Running", f"🟢 {int(st_counts.get('Running', 0))} running"),
             ("Next", f"🟡 {int(st_counts.get('Next', 0))} next"),
-            ("No material", f"🔴 {int(st_counts.get('No material', 0))} no material")]
+            ("Not ready", f"🔴 {int(st_counts.get('Not ready', 0))} not ready")]
     downs = sum(1 for f in flags.values() if f.get("down"))
     kpi_html = "".join(f'<span class="kpi" style="background:{STATUS_STYLE[s][0]};border-color:{STATUS_STYLE[s][1]};'
                        f'color:{STATUS_STYLE[s][2]}">{t}</span>' for s, t in kpis)
     if downs:
         kpi_html += f'<span class="kpi" style="background:#f1f3f6;border-color:#9aa3ae;color:#4b5563">✕ {downs} line{"s" if downs > 1 else ""} down</span>'
+    if closed:
+        kpi_html += f'<span class="kpi" style="background:#1f2a37;border-color:#1f2a37;color:#fff">↪ {e(closed)}</span>'
 
     goal_rows = "".join(f'<div class="goal"><span>{e(str(g["label"]))}</span><b>{e(str(g["value"]))}</b></div>'
                         for g in goals.to_dict("records")) if not goals.empty else '<div class="empty">—</div>'
@@ -678,7 +751,7 @@ def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: s
                      f'color:{STATUS_STYLE[s][2]}">{s}</span>' for s in STATUSES)
 
     return (f'{BOARD_CSS}<div class="sb{" tv" if tv else ""}">'
-            f'<div class="sb-head"><div class="sb-title">Schedule Board<span>{d.strftime("%a %b %-d")} · {e(shift)} shift</span></div>'
+            f'<div class="sb-head"><div class="sb-title">Schedule Board<span>{e(slot_label(d, shift))}</span></div>'
             f'<div class="kpis">{kpi_html}</div>'
             f'<div class="live"><span class="dot"></span>Live · updated {now().strftime("%-I:%M:%S %p")}</div></div>'
             f'<div class="sb-main"><div class="sb-grid">{"".join(_card(ln, items, flags) for ln in GRID_LINES)}</div>'
@@ -739,7 +812,8 @@ def live_board(d: date | None, shift: str | None, tv: bool) -> None:
         d, shift = current_board()  # TV follows the clock
     core, sched = load_core(), load_sched(mk(d))
     st.html(render_board(d, shift, board_items(sched, d, shift), line_flags(core["lineday"], d, shift),
-                         board_notes(core["boards"], d, shift), core["goals"], tv))
+                         board_notes(core["boards"], d, shift), core["goals"], tv,
+                         closed_text(board_row(core["boards"], d, shift))))
 
 
 def board_page() -> None:
@@ -757,13 +831,53 @@ def on_status(item: dict, key: str, user: str) -> None:
     new = st.session_state.get(key)
     if not new or new == item["status"]:
         return
+    if new == "Not ready":  # reason is required — ask in a dialog before saving
+        st.session_state["_notready"] = {"item": item, "key": key, "user": user}
+        return
     ch = {"status": new}
-    if new == "No material" and not item["reason"]:
-        ch["reason"] = "No material"
-    elif new != "No material" and item["reason"] == "No material":
+    if item["status"] == "Not ready":
         ch["reason"] = ""
     if safe(update_item, item, ch, user, "status"):
         flash(f"{item['recipe']} → {new}")
+
+
+def status_key(it: dict) -> str:
+    return f"st_{it['id']}_{it['updated_at']}_{st.session_state.get('nonce_' + it['id'], 0)}"
+
+
+def reset_status_widget(item_id: str) -> None:
+    """Give the status buttons a fresh key so an unsaved pick snaps back to the saved status."""
+    st.session_state["nonce_" + item_id] = st.session_state.get("nonce_" + item_id, 0) + 1
+
+
+def cancel_notready() -> None:
+    p = st.session_state.pop("_notready", None)
+    if p:
+        reset_status_widget(p["item"]["id"])
+
+
+@st.dialog("Why is it not ready?", on_dismiss=cancel_notready)
+def notready_dialog() -> None:
+    p = st.session_state.get("_notready")
+    if not p:
+        return
+    it = p["item"]
+    st.markdown(f"**{LINE_LABEL.get(it['line'], it['line'])} · {it['recipe']}**")
+    reason = st.selectbox("Reason (required)", REASONS, index=None, placeholder="Pick a reason")
+    comment = st.text_area("Comment (optional)", it["comment"], height=80)
+    c1, c2 = st.columns(2)
+    if c1.button("Save", type="primary", width="stretch"):
+        if not reason:
+            st.error("Pick a reason first.")
+            return
+        st.session_state.pop("_notready", None)
+        if safe(update_item, it, {"status": "Not ready", "reason": reason, "comment": comment.strip()},
+                p["user"], "status"):
+            flash(f"{it['recipe']} → Not ready ({reason})")
+        st.rerun()
+    if c2.button("Cancel", width="stretch"):
+        cancel_notready()
+        st.rerun()
 
 
 def on_toggle_down(d: date, shift: str, line: str, key: str, flags: dict, user: str) -> None:
@@ -774,25 +888,72 @@ def on_toggle_down(d: date, shift: str, line: str, key: str, flags: dict, user: 
 
 
 def item_row(it: dict, user: str) -> None:
-    c1, c2, c3 = st.columns([2.2, 6.5, 0.8], vertical_alignment="center")
-    c1.markdown(f"**{it['recipe']}**" + (f" ×{it['qty']}" if it["qty"] else ""))
+    c1, c2, c3 = st.columns([2.2, 6, 2], vertical_alignment="center")
+    c1.markdown(f"**{it['recipe']}**" + (f" ×{it['qty']}" if it["qty"] else "") + (" ↪" if truthy(it["carried"]) else ""))
     sub = " · ".join(x for x in (it["reason"], it["comment"]) if x)
     if sub:
         c1.caption(sub)
-    key = f"st_{it['id']}_{it['updated_at']}"
+    key = status_key(it)
+    pending = st.session_state.get("_notready")
+    if key in st.session_state and st.session_state[key] != it["status"] and not (pending and pending["key"] == key):
+        reset_status_widget(it["id"])  # an unsaved pick (e.g. cancelled Not ready) snaps back
+        key = status_key(it)
     c2.segmented_control("Status", STATUSES, default=it["status"] if it["status"] in STATUSES else None,
                          format_func=lambda s: f"{ICON[s]} {s}", key=key, label_visibility="collapsed",
                          on_change=on_status, args=(it, key, user))
-    with c3.popover("💬", help="Reason / comment"):
+    with c3.popover("💬 Comments", help="Reason and comment — carried to the next shift"):
         with st.form(f"note_{it['id']}_{it['updated_at']}", border=False):
-            st.markdown(f"**{it['recipe']}**")
-            reason = st.selectbox("Reason", REASONS, index=REASONS.index(it["reason"]) if it["reason"] in REASONS else 0,
-                                  format_func=lambda r: r or "—")
-            comment = st.text_area("Comment", it["comment"], height=80, placeholder="Why it didn't run, what's needed…")
+            st.markdown(f"**Comments · {it['recipe']}**")
+            reason = st.selectbox("Reason", REASONS, index=REASONS.index(it["reason"]) if it["reason"] in REASONS else None,
+                                  placeholder="Pick a reason")
+            comment = st.text_area("Comment", it["comment"], height=80, placeholder="What happened, what's needed…")
             if st.form_submit_button("Save", type="primary"):
-                if safe(update_item, it, {"reason": reason, "comment": comment.strip()}, user, "note"):
-                    flash(f"Note saved on {it['recipe']}")
+                if it["status"] == "Not ready" and not reason:
+                    st.error("Not ready needs a reason.")
+                    return
+                if safe(update_item, it, {"reason": reason or "", "comment": comment.strip()}, user, "note"):
+                    flash(f"Comments saved on {it['recipe']}")
                 st.rerun()
+
+
+@st.dialog("End shift & carry over", width="large")
+def carryover_dialog(d: date, shift: str, user: str) -> None:
+    items = board_items(load_sched(mk(d)), d, shift)
+    todo = items[(items["status"] != "Finished") & (~items["carried"].map(truthy))] if not items.empty else items
+    nd, ns = next_slot(d, shift)
+    if todo.empty:
+        st.success("Everything on this board is finished or already carried over.")
+        return
+    st.markdown(f"These **{len(todo)}** recipes didn't finish. They'll move to the top of **{slot_label(nd, ns)}** "
+                "with their status, reason and comment. Finished recipes stay on this shift's record.")
+    with st.form("carryover_form", border=False):
+        for line in LINE_IDS:
+            li = todo[todo["line"] == line]
+            if li.empty:
+                continue
+            st.markdown(f"**{LINE_LABEL[line]}**")
+            for it in li.to_dict("records"):
+                c1, c2, c3 = st.columns([1.6, 2, 3], vertical_alignment="center")
+                c1.markdown(f"{ICON.get(it['status'], '')} {it['recipe']}" + (f" ×{it['qty']}" if it["qty"] else ""))
+                c2.selectbox("Reason", REASONS, key=f"co_r_{it['id']}", label_visibility="collapsed",
+                             index=REASONS.index(it["reason"]) if it["reason"] in REASONS else None,
+                             placeholder="Reason (required)")
+                c3.text_input("Comment", it["comment"], key=f"co_c_{it['id']}", label_visibility="collapsed",
+                              placeholder="Comment (optional)")
+        go = st.form_submit_button(f"↪ Carry over to {slot_label(nd, ns)}", type="primary")
+    if go:
+        ss = st.session_state
+        missing = [f"{LINE_LABEL[r['line']]} · {r['recipe']}" for r in todo.to_dict("records") if not ss.get(f"co_r_{r['id']}")]
+        if missing:
+            st.error(f"Pick a reason for every recipe — missing {len(missing)}: " + ", ".join(missing[:8])
+                     + ("…" if len(missing) > 8 else ""))
+            return
+        answers = {r["id"]: (ss[f"co_r_{r['id']}"], ss.get(f"co_c_{r['id']}", "").strip()) for r in todo.to_dict("records")}
+        res = safe(carry_over, d, shift, todo, answers, user)
+        if res:
+            n, rd, rs = res
+            flash(f"Shift ended — {n} recipes carried to {slot_label(rd, rs)}")
+        st.rerun()
 
 
 def lead_page() -> None:
@@ -805,14 +966,23 @@ def lead_page() -> None:
     sched = load_sched(mk(d))
     items = board_items(sched, d, shift)
     flags = line_flags(core["lineday"], d, shift)
+    closed = closed_text(board_row(core["boards"], d, shift))
     mine = u["lines"]
     with_items = [ln for ln in mine if not items.empty and (items["line"] == ln).any()]
     default = mine if len(mine) <= 6 else (with_items or mine)
-    c1, c2 = st.columns([5, 1], vertical_alignment="bottom")
+    c1, c2, c3 = st.columns([4, 1, 1.6], vertical_alignment="bottom")
     show = c1.multiselect("Lines", mine, default=default, format_func=LINE_LABEL.get, key=f"lead_lines_{u['name']}")
     if c2.button("🔄 Refresh"):
         refresh()
         st.rerun()
+    if c3.button("🔚 End shift & carry over", type="primary",
+                 help="At the end of the shift: everything not Finished moves to the next shift's board"):
+        cancel_notready()
+        carryover_dialog(d, shift, u["name"])
+    elif "_notready" in st.session_state:
+        notready_dialog()
+    if closed:
+        st.info(f"↪ {closed}")
     if items.empty:
         st.info("Nothing is on the board for this shift yet. A planner sets it up on the **Plan** page — "
                 "or add recipes below.")
@@ -821,7 +991,7 @@ def lead_page() -> None:
         f = flags.get(line, {})
         with st.container(border=True):
             h1, h2 = st.columns([4, 1], vertical_alignment="center")
-            tags = (" · ★ priority" if f.get("priority") else "") + (" · hand pack" if f.get("hand_pack") else "")
+            tags = " · ★ priority" if f.get("priority") else ""
             done = int((li["status"] == "Finished").sum()) if len(li) else 0
             h1.markdown(f"#### {LINE_LABEL[line]} <span style='font-size:.8rem;color:#5f6b7a'>"
                         f"{done}/{len(li)} done{tags}</span>", unsafe_allow_html=True)
@@ -880,23 +1050,14 @@ def plan_page() -> None:
     flags = line_flags(core["lineday"], d, shift)
     notes = board_notes(core["boards"], d, shift)
 
-    b1, b2, b3, _ = st.columns([1.4, 1.1, 0.9, 2])
-    if b1.button("↪ Carry over unfinished", help="Load every recipe not Finished on the last board"):
-        prev = find_previous_board(d, shift)
-        if prev:
-            pd_, ps, pit = prev
-            pit = pit[pit["status"] != "Finished"]
-            fill_plan(tag, pit, line_flags(core["lineday"], pd_, ps), notes, overwrite=True, copy_down=False)
-            st.info(f"Loaded unfinished recipes from {pd_:%a %b %-d} {ps} shift — review and **Save board**.")
-        else:
-            st.warning("No earlier board found in the last two weeks.")
+    b2, b3, _ = st.columns([1.1, 0.9, 3.4])
     if b2.button("⧉ Copy last board"):
         prev = find_previous_board(d, shift)
         if prev:
             pd_, ps, pit = prev
             fill_plan(tag, pit, line_flags(core["lineday"], pd_, ps), board_notes(core["boards"], pd_, ps),
                       overwrite=True, copy_down=False)
-            st.info(f"Copied {pd_:%a %b %-d} {ps} shift — review and **Save board**.")
+            st.info(f"Copied {slot_label(pd_, ps)} — review and **Save board**.")
         else:
             st.warning("No earlier board found in the last two weeks.")
     if b3.button("↺ Discard edits"):
@@ -906,7 +1067,8 @@ def plan_page() -> None:
 
     with st.form(f"plan_form_{tag}"):
         st.caption("One recipe per row (or comma-separated), in run order. Add `x6` for batches. "
-                   "Recipes already on the board keep their status when you save.")
+                   "Recipes already on the board (including ones carried over from last shift) keep their "
+                   "status when you save.")
         for group in (GRID_LINES[:10], GRID_LINES[10:], SIDE_LINES):
             for i in range(0, len(group), 5):
                 cols = st.columns(5)
@@ -916,12 +1078,11 @@ def plan_page() -> None:
                     started = [f"{ICON[s]} {r}" for r, s in zip(li["recipe"], li["status"]) if s in ICON and s != "Ready"]
                     if started:
                         c.caption(" · ".join(started))
-        f1, f2, f3 = st.columns(3)
+        f1, f2 = st.columns(2)
         f1.multiselect("Lines down (✕)", LINE_IDS, key=f"plan_{tag}_down", format_func=LINE_LABEL.get)
         f2.multiselect("Priority lines", LINE_IDS, key=f"plan_{tag}_priority", format_func=LINE_LABEL.get)
-        f3.multiselect("Hand pack lines", LINE_IDS, key=f"plan_{tag}_hand_pack", format_func=LINE_LABEL.get)
         st.text_area("Board notes (everyone sees these)", key=f"plan_{tag}_notes", height=110,
-                     placeholder="High protein items, hand pack, reminders…")
+                     placeholder="High protein items, reminders…")
         submitted = st.form_submit_button("💾 Save board", type="primary")
 
     if submitted:
@@ -986,20 +1147,21 @@ def history_page() -> None:
         return
     df["Line"] = df["line"].map(LINE_LABEL).fillna(df["line"])
     df["finished"] = df["status"].eq("Finished")
+    df["carried"] = df["carried"].map(lambda x: "Yes" if truthy(x) else "")
     df["run_min"] = ((pd.to_datetime(df["finished_at"], errors="coerce") -
                       pd.to_datetime(df["started_at"], errors="coerce")).dt.total_seconds() / 60).round(0)
 
     planned, fin = len(df), int(df["finished"].sum())
-    nm_events = int((lg["to_status"] == "No material").sum()) if not lg.empty else 0
+    carried = int((df["carried"] == "Yes").sum())
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Recipes planned", planned)
     m2.metric("Finished", f"{fin}  ({fin / planned:.0%})")
     m3.metric("Not finished", planned - fin)
-    m4.metric("No-material events", nm_events)
+    m4.metric("Carried to next shift", carried)
 
     a, b = st.columns(2)
     with a:
-        st.markdown("**Why recipes didn't finish**")
+        st.markdown("**Why recipes didn't finish (carry-over reasons)**")
         nf = df[~df["finished"]]
         if nf.empty:
             st.caption("Everything planned was finished. 🎉")
@@ -1022,7 +1184,7 @@ def history_page() -> None:
 
     st.markdown("**Recipes**")
     cols = {"date": "Date", "shift": "Shift", "Line": "Line", "seq": "#", "recipe": "Recipe", "qty": "Qty",
-            "status": "Status", "reason": "Reason", "comment": "Comment", "started_at": "Started",
+            "status": "Status", "reason": "Reason", "comment": "Comment", "carried": "Carried over", "started_at": "Started",
             "finished_at": "Finished", "run_min": "Run (min)", "updated_by": "Last update by"}
     out = df.sort_values(["date", "shift", "line", "seq"])[list(cols)].rename(columns=cols)
     st.dataframe(out, hide_index=True)
