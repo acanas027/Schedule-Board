@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Schedule Board", page_icon="📋", layout="wide")
 
@@ -1357,6 +1358,57 @@ def plan_page() -> None:
             st.rerun()
 
 
+def history_print_html(df: pd.DataFrame, start: date, end: date, sel: list, planned: int, fin: int, carried: int) -> str:
+    """A Print button that prints only the summary (numbers + both charts), not the whole page."""
+    e = html.escape
+
+    def bars(series: pd.Series, suffix: str = "", vmax: float | None = None) -> str:
+        if series.empty:
+            return '<p class="muted">Nothing to show.</p>'
+        top = vmax or max(float(series.max()), 1)
+        return "".join(
+            f'<div class="row"><span class="lbl">{e(str(k))}</span><span class="track">'
+            f'<span class="bar" style="width:{max(float(v), 0) / top * 100:.1f}%"></span></span>'
+            f'<span class="val">{float(v):.0f}{suffix}</span></div>' for k, v in series.items())
+
+    nf = df[~df["finished"]]
+    reasons = nf["reason"].replace("", "No reason given").value_counts()
+    by_line = df.groupby("line").agg(planned=("id", "count"), finished=("finished", "sum"))
+    by_line = (by_line["finished"] / by_line["planned"] * 100).reindex([i for i in LINE_IDS if i in by_line.index])
+    by_line.index = [LINE_LABEL[i] for i in by_line.index]
+    lines_txt = ", ".join(LINE_LABEL[i] for i in sel) if sel else "All lines"
+    rng = f"{start:%b} {start.day}, {start.year} – {end:%b} {end.day}, {end.year}"
+    report = f"""
+<h1>Schedule Board — History</h1>
+<p class="sub">{e(rng)} · {e(lines_txt)} · printed {now():%b} {now().day}, {now():%-I:%M %p}</p>
+<div class="kpis">
+  <div><span>Recipes planned</span><b>{planned}</b></div>
+  <div><span>Finished</span><b>{fin} ({fin / planned:.0%})</b></div>
+  <div><span>Not finished</span><b>{planned - fin}</b></div>
+  <div><span>Carried to next shift</span><b>{carried}</b></div>
+</div>
+<h2>Why recipes didn't finish (carry-over reasons)</h2>{bars(reasons) if not nf.empty else '<p class="muted">Everything planned was finished.</p>'}
+<h2>Finish rate by line</h2>{bars(by_line, "%", 100)}"""
+    return f"""<!DOCTYPE html><html><head><style>
+body{{margin:0;font-family:"Source Sans Pro",system-ui,sans-serif;color:#1f2a37}}
+button{{font:inherit;font-size:14px;padding:6px 14px;border:1px solid #d6dbe2;border-radius:8px;background:#fff;cursor:pointer}}
+button:hover{{border-color:#c62828;color:#c62828}}
+#report{{display:none}}
+h1{{font-size:22px;margin:0 0 2px}} h2{{font-size:15px;margin:22px 0 8px}} .sub,.muted{{color:#5f6b7a;font-size:12px;margin:0}}
+.kpis{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}}
+.kpis div{{border:1px solid #d6dbe2;border-radius:8px;padding:8px 10px}} .kpis span{{display:block;font-size:12px;color:#5f6b7a}}
+.kpis b{{font-size:24px}}
+.row{{display:grid;grid-template-columns:150px 1fr 48px;align-items:center;gap:8px;margin:4px 0;font-size:13px}}
+.track{{background:#eef0f3;border-radius:3px;height:14px;display:block}}
+.bar{{display:block;height:14px;border-radius:3px;background:#1a56db;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+.val{{text-align:right;font-variant-numeric:tabular-nums}}
+@media print{{ #btn{{display:none}} #report{{display:block}} @page{{margin:14mm}} }}
+</style></head><body>
+<button id="btn" onclick="window.print()">🖨️ Print summary</button>
+<div id="report">{report}</div>
+</body></html>"""
+
+
 def history_page() -> None:
     st.title("📈 History")
     today = now().date()
@@ -1391,6 +1443,7 @@ def history_page() -> None:
 
     planned, fin = len(df), int(df["finished"].sum())
     carried = int((df["carried"] == "Yes").sum())
+    components.html(history_print_html(df, start, end, sel, planned, fin, carried), height=48)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Recipes planned", planned)
     m2.metric("Finished", f"{fin}  ({fin / planned:.0%})")
