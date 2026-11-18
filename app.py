@@ -979,8 +979,7 @@ def board_page() -> None:
         return
     d, shift = board_picker("board")
     live_board(d, shift, False)
-    st.caption(f"Refreshes every {REFRESH_SECONDS}s. For the office TV, open the app link with `?tv=1` at the end — "
-               "it hides the menus and follows the current shift.")
+   
 
 
 def on_status(item: dict, key: str, user: str) -> None:
