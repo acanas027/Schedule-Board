@@ -9,9 +9,15 @@ Backend: Google Sheets. With no secrets configured the app runs in DEMO mode
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import html
+import json
+import os
 import re
 import threading
+import time
 import uuid
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -45,14 +51,18 @@ STATUS_STYLE = {  # background, border, text, tag
     "Running": ("#dcf5e3", "#188038", "#0d5223", "RUNNING"),
     "Finished": ("#eceff3", "#c3c9d2", "#7a8594", "DONE"),
 }
-REASONS = ["Ran out of time", "Mechanical issues", "Rework other product", "No material", "Short staffed"]
+REASONS = ["Ran out of time", "Mechanical issues", "Rework other product", "No material", "Short staffed", "Working on it"]
 
 SHIFTS = ["1st", "2nd"]                 # in start-time order
-SHIFT_START = {"1st": 5, "2nd": 15}     # hour (24h) each shift starts
+SHIFT_START = {"1st": 6, "2nd": 16}     # hour (24h) each shift starts
+CLOSE_BY = {"1st": (15, 55, 0), "2nd": (3, 0, 1)}  # shift must be ended by (hour, minute, days after shift date)
+CLOSE_WARN_MINUTES = 15                 # pop-up starts this many minutes before the deadline
 PLANNER_ROLES = ("planner", "admin")
+SESSION_HOURS = 12                      # how long a sign-in lasts (survives refresh)
 REFRESH_SECONDS = 15                    # board auto-refresh
 CACHE_SECONDS = 10                      # shared read cache (protects Sheets quota)
 FLAG_KEYS = ("down", "priority")
+DOWN_REASONS = ["No Material", "No Staff", "Mechanical Issues", "Not Scheduled"]
 
 # Sheet tabs (schedule_YYYY_MM and log_YYYY_MM are created per month)
 SCHED_COLS = ["id", "date", "shift", "line", "seq", "recipe", "qty", "status", "reason", "comment",
@@ -60,7 +70,7 @@ SCHED_COLS = ["id", "date", "shift", "line", "seq", "recipe", "qty", "status", "
               "carried", "carried_from"]
 LOG_COLS = ["ts", "date", "shift", "line", "item_id", "recipe", "action", "from_status", "to_status",
             "reason", "comment", "user"]
-LINEDAY_COLS = ["key", "date", "shift", "line", "down", "priority", "updated_by", "updated_at"]
+LINEDAY_COLS = ["key", "date", "shift", "line", "down", "priority", "updated_by", "updated_at", "down_reason"]
 BOARD_COLS = ["key", "date", "shift", "notes", "updated_by", "updated_at", "closed_by", "closed_at", "carried_count"]
 GOAL_COLS = ["label", "value"]
 LEAD_COLS = ["name", "pin", "role", "lines", "active"]
@@ -149,9 +159,15 @@ def allowed_lines(spec) -> list[str]:
     if not spec or spec.upper() == "ALL":
         return list(LINE_IDS)
     out = []
-    for tok in re.split(r"[,;/]+", spec):
+    for tok in re.split(r"[,;]+", spec):
         t = tok.strip().upper()
         if not t:
+            continue
+        rng = (re.match(r"^(?:LINES?\s*)?(\d+)\s*(?:-|–|TO)\s*(\d+)$", t)
+               or re.match(r"^(\d+)/(\d+)(?:/\d+)?$", t))  # Sheets may turn 1-9 into a date like 1/9/2026
+        if rng:  # a range like 1-9 or 10-17
+            lo, hi = sorted((int(rng.group(1)), int(rng.group(2))))
+            out += [f"L{n}" for n in range(lo, hi + 1) if f"L{n}" in LINE_LABEL and f"L{n}" not in out]
             continue
         if t.isdigit():
             t = f"L{int(t)}"
@@ -199,9 +215,15 @@ class SheetStore:
         self.sh = gspread.authorize(creds).open_by_key(sheet_id)
         self.ws = {w.title: w for w in self.sh.worksheets()}
         self.lock = threading.Lock()
+        self.checked: set[str] = set()
 
     def ensure(self, name, header, seed=None):
         if name in self.ws:
+            if name not in self.checked:  # add columns a newer version needs to an existing tab
+                self.checked.add(name)
+                cur = [c.strip() for c in self.ws[name].row_values(1)]
+                if cur != header and cur == header[:len(cur)]:
+                    self.ws[name].update(range_name="A1", values=[header], value_input_option="RAW")
             return
         with self.lock:
             if name in self.ws:
@@ -248,6 +270,7 @@ class SheetStore:
 
 class MemoryStore:
     demo = True
+    why = ""
 
     def __init__(self):
         self.t: dict[str, list[list[str]]] = {}
@@ -342,7 +365,8 @@ def demo_store() -> MemoryStore:
                                        ["Demo Planner", "2222", "planner", "ALL", True]])
     s.ensure("goals", GOAL_COLS, seed=DEFAULT_GOALS)
     s.ensure("lineday", LINEDAY_COLS, seed=[
-        [line_key(d, shift, ln), d.isoformat(), shift, ln, ln in ("L17", "L18"), ln == "L9", "Demo Planner", start]
+        [line_key(d, shift, ln), d.isoformat(), shift, ln, ln in ("L17", "L18"), ln == "L9", "Demo Planner", start,
+         {"L17": "Not Scheduled", "L18": "Mechanical Issues"}.get(ln, "")]
         for ln in ("L9", "L17", "L18")])
     s.ensure("boards", BOARD_COLS, seed=[[board_key(d, shift), d.isoformat(), shift, DEMO_NOTES, "Demo Planner", start]])
     return s
@@ -351,11 +375,20 @@ def demo_store() -> MemoryStore:
 @st.cache_resource(show_spinner="Connecting to Google Sheets…")
 def store():
     try:
-        sa = dict(st.secrets["gcp_service_account"])
-        sheet_id = st.secrets["sheet_id"]
+        keys = list(st.secrets.keys())
     except Exception:
-        return demo_store()
-    return SheetStore(sa, sheet_id)
+        keys = []
+    if not keys:
+        s = demo_store()
+        s.why = "No secrets found."
+        return s
+    missing = [k for k in ("sheet_id", "gcp_service_account") if k not in keys]
+    if missing:
+        s = demo_store()
+        s.why = (f"Secrets are missing `{'` and `'.join(missing)}` at the top level. "
+                 f"Top-level keys found: `{', '.join(keys)}`.")
+        return s
+    return SheetStore(dict(st.secrets["gcp_service_account"]), str(st.secrets["sheet_id"]).strip())
 
 
 # ── Reads (cached, shared by every viewer) ─────────────────────────────────────
@@ -417,7 +450,8 @@ def line_flags(lineday: pd.DataFrame, d: date, shift: str) -> dict[str, dict]:
         return out
     df = lineday[(lineday["date"] == d.isoformat()) & (lineday["shift"] == shift)]
     for r in df.to_dict("records"):
-        out[r["line"]] = {k: truthy(r[k]) for k in FLAG_KEYS}
+        out[r["line"]] = {**{k: truthy(r[k]) for k in FLAG_KEYS},
+                          "down_reason": str(r.get("down_reason", "")).strip() if truthy(r["down"]) else ""}
     return out
 
 
@@ -437,6 +471,33 @@ def closed_text(row: dict) -> str:
         return ""
     t = datetime.strptime(row["closed_at"], "%Y-%m-%d %H:%M:%S")
     return f"Shift ended {t:%-I:%M %p} by {row.get('closed_by', '')} — {row.get('carried_count') or 0} carried to next shift"
+
+
+def close_deadline(d: date, shift: str) -> datetime:
+    h, m, off = CLOSE_BY[shift]
+    return datetime(d.year, d.month, d.day, h, m, tzinfo=TZ) + timedelta(days=off)
+
+
+def close_reminder(core: dict) -> dict | None:
+    """The oldest of the last two shifts that is near/past its end-shift deadline and not ended yet."""
+    n = now()
+    cd, cs = current_board()
+    for d, s in (prev_slot(cd, cs), (cd, cs)):
+        dl = close_deadline(d, s)
+        if n < dl - timedelta(minutes=CLOSE_WARN_MINUTES) or board_row(core["boards"], d, s).get("closed_at"):
+            continue
+        if board_items(load_sched(mk(d)), d, s).empty:  # nothing ran (e.g. no production) — nothing to close
+            continue
+        mins = int(abs((n - dl).total_seconds()) // 60)
+        return {"d": d, "s": s, "deadline": dl, "overdue": n >= dl, "mins": mins}
+    return None
+
+
+def reminder_text(r: dict) -> str:
+    due = f"{r['deadline']:%-I:%M %p}"
+    if r["overdue"]:
+        return f"{slot_label(r['d'], r['s'])} not ended — was due {due} ({r['mins']} min late)"
+    return f"{slot_label(r['d'], r['s'])} must be ended by {due} ({r['mins']} min left)"
 
 
 def month_range(a: date, b: date) -> list[str]:
@@ -614,14 +675,17 @@ def carry_over(d: date, shift: str, items: pd.DataFrame, answers: dict, user: st
     return len(new_rows), nd, ns
 
 
-def save_flags(d: date, shift: str, desired: dict, current: dict, user: str) -> None:
+def save_flags(d: date, shift: str, desired: dict, current: dict, user: str) -> bool:
     rows = []
     for line in LINE_IDS:
         want, have = desired.get(line, {}), current.get(line, {})
-        if any(bool(want.get(k)) != bool(have.get(k)) for k in FLAG_KEYS):
+        reason = (want.get("down_reason") or "") if want.get("down") else ""
+        if any(bool(want.get(k)) != bool(have.get(k)) for k in FLAG_KEYS) or reason != (have.get("down_reason") or ""):
             rows.append({"key": line_key(d, shift, line), "date": d.isoformat(), "shift": shift, "line": line,
-                         **{k: bool(want.get(k)) for k in FLAG_KEYS}, "updated_by": user, "updated_at": stamp()})
+                         **{k: bool(want.get(k)) for k in FLAG_KEYS}, "down_reason": reason,
+                         "updated_by": user, "updated_at": stamp()})
     upsert("lineday", LINEDAY_COLS, rows)
+    return True
 
 
 def safe(fn, *args, **kwargs):
@@ -640,6 +704,7 @@ BOARD_CSS = """<style>
 .sb-title span{font-weight:600;color:#5f6b7a;font-size:15px;margin-left:6px}
 .kpis{display:flex;gap:6px;flex-wrap:wrap}
 .kpi{border-radius:999px;padding:2px 10px;font-size:13px;font-weight:700;border:1.5px solid;white-space:nowrap}
+.kpi.alert{background:#d93025;border-color:#d93025;color:#fff;animation:sbp 1.6s infinite}
 .live{margin-left:auto;font-size:12px;color:#5f6b7a;white-space:nowrap}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#188038;margin-right:5px;animation:sbp 2s infinite}
 @keyframes sbp{50%{opacity:.25}}
@@ -656,7 +721,8 @@ BOARD_CSS = """<style>
 .badges{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:2px}
 .badge{font-size:9.5px;font-weight:800;border-radius:3px;padding:1px 5px;letter-spacing:.03em;color:#fff}
 .badge.prio{background:#c62828}
-.downx{font-size:20px;font-weight:900;color:#9aa3ae;text-align:center;padding:16px 0 6px}
+.downx{font-size:20px;font-weight:900;color:#9aa3ae;text-align:center;padding:16px 0 2px}
+.downr{font-size:12px;font-weight:800;color:#a50e0e;text-align:center;padding-bottom:6px}
 .item{display:flex;justify-content:space-between;align-items:center;gap:4px;border:1.5px solid;border-radius:6px;padding:3px 6px;margin-top:4px;font-weight:700;font-size:14px;line-height:1.25}
 .item .tag{font-size:8.5px;font-weight:800;letter-spacing:.05em;white-space:nowrap}
 .item.s-running{box-shadow:0 0 0 2px rgba(24,128,56,.28)}
@@ -703,6 +769,8 @@ def _card(line: str, items: pd.DataFrame, flags: dict) -> str:
         out.append(f'<div class="badges">{badges}</div>')
     if f.get("down"):
         out.append('<div class="downx">✕ DOWN</div>')
+        if f.get("down_reason"):
+            out.append(f'<div class="downr">{e(f["down_reason"])}</div>')
     for it in li.to_dict("records"):
         status = it["status"] if it["status"] in STATUS_STYLE else "Ready"
         bg, bd, fg, tag = STATUS_STYLE[status]
@@ -719,7 +787,7 @@ def _card(line: str, items: pd.DataFrame, flags: dict) -> str:
 
 
 def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: str, goals: pd.DataFrame, tv: bool,
-                 closed: str = "") -> str:
+                 closed: str = "", alert: str = "") -> str:
     e = html.escape
     st_counts = items["status"].value_counts() if not items.empty else pd.Series(dtype=int)
     total = len(items)
@@ -734,6 +802,8 @@ def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: s
         kpi_html += f'<span class="kpi" style="background:#f1f3f6;border-color:#9aa3ae;color:#4b5563">✕ {downs} line{"s" if downs > 1 else ""} down</span>'
     if closed:
         kpi_html += f'<span class="kpi" style="background:#1f2a37;border-color:#1f2a37;color:#fff">↪ {e(closed)}</span>'
+    if alert:
+        kpi_html += f'<span class="kpi alert">⏰ {e(alert)}</span>'
 
     goal_rows = "".join(f'<div class="goal"><span>{e(str(g["label"]))}</span><b>{e(str(g["value"]))}</b></div>'
                         for g in goals.to_dict("records")) if not goals.empty else '<div class="empty">—</div>'
@@ -786,12 +856,70 @@ def login_form(core: dict) -> None:
         if st.form_submit_button("Sign in", type="primary"):
             row = leads[leads["name"].astype(str).str.strip() == name] if name else leads.iloc[0:0]
             if not row.empty and pin_ok(pin, row.iloc[0]["pin"]):
-                r = row.iloc[0]
-                role = str(r["role"]).strip().lower() or "lead"
-                st.session_state["user"] = {"name": name, "role": role,
-                                            "lines": list(LINE_IDS) if role in PLANNER_ROLES else allowed_lines(r["lines"])}
+                exp = int(time.time() + SESSION_HOURS * 3600)
+                u = make_user(row.iloc[0], exp, make_token(name, row.iloc[0]["pin"], exp))
+                st.session_state["user"] = u
+                st.query_params["s"] = u["token"]
                 st.rerun()
             st.error("Wrong name or PIN.")
+
+
+# ── Staying signed in: a signed token in the URL (?s=…) survives refresh for SESSION_HOURS ──
+@st.cache_resource
+def session_secret() -> bytes:
+    try:
+        return hashlib.sha256(str(st.secrets["gcp_service_account"]["private_key"]).encode()).digest()
+    except Exception:
+        return os.urandom(32)  # demo mode: sign-ins last until the app restarts
+
+
+def _sig(payload: str, pin) -> str:
+    return hmac.new(session_secret(), f"{payload}|{str(pin).strip()}".encode(), hashlib.sha256).hexdigest()[:24]
+
+
+def make_token(name: str, pin, exp: int) -> str:
+    payload = base64.urlsafe_b64encode(json.dumps({"n": name, "e": exp}).encode()).decode().rstrip("=")
+    return f"{payload}.{_sig(payload, pin)}"
+
+
+def make_user(row, exp: int, token: str) -> dict:
+    role = str(row["role"]).strip().lower() or "lead"
+    return {"name": str(row["name"]).strip(), "role": role, "exp": exp, "token": token,
+            "lines": list(LINE_IDS) if role in PLANNER_ROLES else allowed_lines(row["lines"])}
+
+
+def user_from_token(tok: str, leads: pd.DataFrame) -> dict | None:
+    """Valid only if not expired, the person is still active, and their PIN hasn't changed."""
+    try:
+        payload, sig = tok.rsplit(".", 1)
+        data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        if int(data["e"]) < time.time() or leads.empty:
+            return None
+        rows = leads[(leads["name"].astype(str).str.strip() == data["n"])
+                     & leads["active"].map(lambda x: str(x).strip() == "" or truthy(x))]
+        if rows.empty or not hmac.compare_digest(sig, _sig(payload, rows.iloc[0]["pin"])):
+            return None
+        return make_user(rows.iloc[0], int(data["e"]), tok)
+    except Exception:
+        return None
+
+
+def keep_signed_in() -> None:
+    ss, qp = st.session_state, st.query_params
+    u = ss.get("user")
+    if u and time.time() > u["exp"]:
+        ss.pop("user", None)
+        qp.pop("s", None)
+        flash("Your sign-in expired — sign in again.", "warn")
+        return
+    if not u and qp.get("s"):
+        u = user_from_token(qp["s"], load_core()["leads"])
+        if u:
+            ss["user"] = u
+        else:
+            qp.pop("s", None)
+    if u and qp.get("s") != u["token"]:
+        qp["s"] = u["token"]  # keep the token in the URL on every page so a refresh stays signed in
 
 
 def need_user(core: dict, roles=None) -> dict | None:
@@ -811,9 +939,10 @@ def live_board(d: date | None, shift: str | None, tv: bool) -> None:
     if d is None:
         d, shift = current_board()  # TV follows the clock
     core, sched = load_core(), load_sched(mk(d))
+    r = close_reminder(core)
     st.html(render_board(d, shift, board_items(sched, d, shift), line_flags(core["lineday"], d, shift),
                          board_notes(core["boards"], d, shift), core["goals"], tv,
-                         closed_text(board_row(core["boards"], d, shift))))
+                         closed_text(board_row(core["boards"], d, shift)), reminder_text(r) if r else ""))
 
 
 def board_page() -> None:
@@ -881,10 +1010,43 @@ def notready_dialog() -> None:
 
 
 def on_toggle_down(d: date, shift: str, line: str, key: str, flags: dict, user: str) -> None:
+    if st.session_state.get(key):  # turning a line down needs a reason — ask first
+        st.session_state["_down_pending"] = {"d": d, "shift": shift, "line": line, "flags": flags, "user": user}
+        return
     desired = {ln: dict(v) for ln, v in flags.items()}
-    desired.setdefault(line, {})["down"] = bool(st.session_state.get(key))
+    desired.setdefault(line, {}).update(down=False, down_reason="")
     safe(save_flags, d, shift, desired, flags, user)
     refresh()
+
+
+def cancel_down() -> None:
+    p = st.session_state.pop("_down_pending", None)
+    if p:
+        reset_status_widget(f"down_{p['line']}")
+
+
+@st.dialog("Why is the line down?", on_dismiss=cancel_down)
+def down_dialog() -> None:
+    p = st.session_state.get("_down_pending")
+    if not p:
+        return
+    st.markdown(f"**{LINE_LABEL[p['line']]}** · {slot_label(p['d'], p['shift'])}")
+    reason = st.radio("Reason (required)", DOWN_REASONS, index=None)
+    c1, c2 = st.columns(2)
+    if c1.button("Save", type="primary", width="stretch"):
+        if not reason:
+            st.error("Pick a reason first.")
+            return
+        st.session_state.pop("_down_pending", None)
+        desired = {ln: dict(v) for ln, v in p["flags"].items()}
+        desired.setdefault(p["line"], {}).update(down=True, down_reason=reason)
+        if safe(save_flags, p["d"], p["shift"], desired, p["flags"], p["user"]):
+            flash(f"{LINE_LABEL[p['line']]} is down — {reason}")
+        refresh()
+        st.rerun()
+    if c2.button("Cancel", width="stretch"):
+        cancel_down()
+        st.rerun()
 
 
 def item_row(it: dict, user: str) -> None:
@@ -923,6 +1085,11 @@ def carryover_dialog(d: date, shift: str, user: str) -> None:
     nd, ns = next_slot(d, shift)
     if todo.empty:
         st.success("Everything on this board is finished or already carried over.")
+        if not board_row(load_core()["boards"], d, shift).get("closed_at"):
+            if st.button("🔚 End shift", type="primary"):
+                if safe(carry_over, d, shift, todo, {}, user):
+                    flash(f"{slot_label(d, shift)} ended")
+                st.rerun()
         return
     st.markdown(f"These **{len(todo)}** recipes didn't finish. They'll move to the top of **{slot_label(nd, ns)}** "
                 "with their status, reason and comment. Finished recipes stay on this shift's record.")
@@ -956,6 +1123,52 @@ def carryover_dialog(d: date, shift: str, user: str) -> None:
         st.rerun()
 
 
+def snooze(r: dict, minutes: int = 5) -> None:
+    st.session_state.setdefault("_close_snooze", {})[board_key(r["d"], r["s"])] = now() + timedelta(minutes=minutes)
+
+
+def snoozed(r: dict) -> bool:
+    until = st.session_state.get("_close_snooze", {}).get(board_key(r["d"], r["s"]))
+    return bool(until and now() < until)
+
+
+def dismiss_reminder() -> None:
+    r = st.session_state.get("_reminder")
+    if r:
+        snooze(r)
+
+
+@st.dialog("⏰ End the shift", on_dismiss=dismiss_reminder)
+def close_reminder_dialog() -> None:
+    r = st.session_state["_reminder"]
+    due = f"{r['deadline']:%-I:%M %p}"
+    if r["overdue"]:
+        st.error(f"**{slot_label(r['d'], r['s'])}** hasn't been ended. It was due at **{due}** — {r['mins']} min late.")
+    else:
+        st.warning(f"**{slot_label(r['d'], r['s'])}** must be ended by **{due}** — {r['mins']} min left.")
+    st.markdown("Press **End shift & carry over** so the next shift gets its board with everything that didn't "
+                "finish and why.")
+    c1, c2 = st.columns(2)
+    if c1.button("🔚 End shift now", type="primary", width="stretch"):
+        snooze(r, 10)
+        st.session_state["_open_carryover"] = (r["d"], r["s"])
+        st.rerun()
+    if c2.button("Remind me in 5 min", width="stretch"):
+        snooze(r)
+        st.rerun()
+
+
+@st.fragment(run_every=60)
+def reminder_watch() -> None:
+    """Pops the end-shift reminder on an idle Update page when it comes due."""
+    ss = st.session_state
+    if ss.get("_reminder_open") or "_notready" in ss or "_down_pending" in ss:
+        return
+    r = close_reminder(load_core())
+    if r and not snoozed(r):
+        st.rerun(scope="app")
+
+
 def lead_page() -> None:
     st.title("✏️ Update the floor")
     core = load_core()
@@ -968,6 +1181,10 @@ def lead_page() -> None:
     flags = line_flags(core["lineday"], d, shift)
     closed = closed_text(board_row(core["boards"], d, shift))
     mine = u["lines"]
+    if not mine:
+        st.warning("No lines could be read for you. In the **leads** tab, column **lines** should look like "
+                   "`1-9`, `7, 8, 9` or `ALL` (format the column as Plain text). Then sign out and back in.")
+        return
     with_items = [ln for ln in mine if not items.empty and (items["line"] == ln).any()]
     default = mine if len(mine) <= 6 else (with_items or mine)
     c1, c2, c3 = st.columns([4, 1, 1.6], vertical_alignment="bottom")
@@ -975,12 +1192,26 @@ def lead_page() -> None:
     if c2.button("🔄 Refresh"):
         refresh()
         st.rerun()
+    ss = st.session_state
+    ss["_reminder_open"] = False
+    goto = ss.pop("_open_carryover", None)
+    rem = close_reminder(core)
     if c3.button("🔚 End shift & carry over", type="primary",
                  help="At the end of the shift: everything not Finished moves to the next shift's board"):
         cancel_notready()
+        if rem:
+            snooze(rem, 10)
         carryover_dialog(d, shift, u["name"])
-    elif "_notready" in st.session_state:
+    elif goto:
+        cancel_notready()
+        carryover_dialog(goto[0], goto[1], u["name"])
+    elif "_notready" in ss:
         notready_dialog()
+    elif "_down_pending" in ss:
+        down_dialog()
+    elif rem and not snoozed(rem):
+        ss["_reminder_open"], ss["_reminder"] = True, rem
+        close_reminder_dialog()
     if closed:
         st.info(f"↪ {closed}")
     if items.empty:
@@ -991,11 +1222,12 @@ def lead_page() -> None:
         f = flags.get(line, {})
         with st.container(border=True):
             h1, h2 = st.columns([4, 1], vertical_alignment="center")
-            tags = " · ★ priority" if f.get("priority") else ""
+            tags = (" · ★ priority" if f.get("priority") else "") + \
+                   (f" · ✕ down: {f['down_reason']}" if f.get("down") and f.get("down_reason") else "")
             done = int((li["status"] == "Finished").sum()) if len(li) else 0
             h1.markdown(f"#### {LINE_LABEL[line]} <span style='font-size:.8rem;color:#5f6b7a'>"
                         f"{done}/{len(li)} done{tags}</span>", unsafe_allow_html=True)
-            dk = f"down_{line}_{d}_{shift}_{f.get('down', False)}"
+            dk = f"down_{line}_{d}_{shift}_{f.get('down', False)}_{st.session_state.get('nonce_down_' + line, 0)}"
             h2.toggle("Line down", value=f.get("down", False), key=dk,
                       on_change=on_toggle_down, args=(d, shift, line, dk, flags, u["name"]))
             for it in li.to_dict("records"):
@@ -1011,17 +1243,21 @@ def lead_page() -> None:
                         if safe(add_items, d, shift, line, entries, u["name"], start):
                             flash(f"Added {len(entries)} to {LINE_LABEL[line]}")
                         st.rerun()
+    reminder_watch()
 
 
 def plan_keys(tag: str) -> list[str]:
-    return [f"plan_{tag}_{ln}" for ln in LINE_IDS] + [f"plan_{tag}_{k}" for k in (*FLAG_KEYS, "notes")]
+    return ([f"plan_{tag}_{ln}" for ln in LINE_IDS] + [f"plan_{tag}_down_{ln}" for ln in LINE_IDS]
+            + [f"plan_{tag}_priority", f"plan_{tag}_notes"])
 
 
 def fill_plan(tag: str, items: pd.DataFrame, flags: dict, notes: str, overwrite: bool, copy_down=True) -> None:
     ss = st.session_state
     values = {f"plan_{tag}_{ln}": entries_text(items[items["line"] == ln]) if not items.empty else "" for ln in LINE_IDS}
-    for k in FLAG_KEYS:
-        values[f"plan_{tag}_{k}"] = [ln for ln in LINE_IDS if flags.get(ln, {}).get(k) and (copy_down or k != "down")]
+    values[f"plan_{tag}_priority"] = [ln for ln in LINE_IDS if flags.get(ln, {}).get("priority")]
+    for ln in LINE_IDS:
+        f = flags.get(ln, {})
+        values[f"plan_{tag}_down_{ln}"] = (f.get("down_reason") or DOWN_REASONS[0]) if copy_down and f.get("down") else None
     values[f"plan_{tag}_notes"] = notes
     for k, v in values.items():
         if overwrite or k not in ss:
@@ -1067,6 +1303,7 @@ def plan_page() -> None:
 
     with st.form(f"plan_form_{tag}"):
         st.caption("One recipe per row (or comma-separated), in run order. Add `x6` for batches. "
+                   "To mark a line down, pick its reason in the box under it (leave it on *Running* otherwise). "
                    "Recipes already on the board (including ones carried over from last shift) keep their "
                    "status when you save.")
         for group in (GRID_LINES[:10], GRID_LINES[10:], SIDE_LINES):
@@ -1074,13 +1311,13 @@ def plan_page() -> None:
                 cols = st.columns(5)
                 for c, line in zip(cols, group[i:i + 5]):
                     c.text_area(LINE_LABEL[line], key=f"plan_{tag}_{line}", height=150)
+                    c.selectbox("Line down?", DOWN_REASONS, key=f"plan_{tag}_down_{line}", index=None,
+                                placeholder="Running", label_visibility="collapsed")
                     li = items[items["line"] == line] if not items.empty else items
                     started = [f"{ICON[s]} {r}" for r, s in zip(li["recipe"], li["status"]) if s in ICON and s != "Ready"]
                     if started:
                         c.caption(" · ".join(started))
-        f1, f2 = st.columns(2)
-        f1.multiselect("Lines down (✕)", LINE_IDS, key=f"plan_{tag}_down", format_func=LINE_LABEL.get)
-        f2.multiselect("Priority lines", LINE_IDS, key=f"plan_{tag}_priority", format_func=LINE_LABEL.get)
+        st.multiselect("Priority lines", LINE_IDS, key=f"plan_{tag}_priority", format_func=LINE_LABEL.get)
         st.text_area("Board notes (everyone sees these)", key=f"plan_{tag}_notes", height=110,
                      placeholder="High protein items, reminders…")
         submitted = st.form_submit_button("💾 Save board", type="primary")
@@ -1088,7 +1325,8 @@ def plan_page() -> None:
     if submitted:
         ss = st.session_state
         plan = {ln: parse_entries(ss[f"plan_{tag}_{ln}"]) for ln in LINE_IDS}
-        desired = {ln: {k: ln in ss[f"plan_{tag}_{k}"] for k in FLAG_KEYS} for ln in LINE_IDS}
+        desired = {ln: {"down": bool(ss.get(f"plan_{tag}_down_{ln}")), "down_reason": ss.get(f"plan_{tag}_down_{ln}") or "",
+                        "priority": ln in ss[f"plan_{tag}_priority"]} for ln in LINE_IDS}
         new_notes = ss[f"plan_{tag}_notes"].strip()
         try:
             added, removed = save_plan(d, shift, plan, items, u["name"])
@@ -1205,12 +1443,16 @@ def sidebar() -> None:
     with st.sidebar:
         if store().demo:
             st.warning("**Demo mode** — not connected to Google Sheets, data resets when the app restarts.\n\n"
+                       f"{store().why}\n\n"
                        "Try it: **Demo Lead** PIN `1111`, **Demo Planner** PIN `2222`.")
         u = st.session_state.get("user")
         if u:
+            left = max(0, int((u["exp"] - time.time()) // 3600))
             st.markdown(f"👤 **{u['name']}** · {u['role']}")
+            st.caption(f"Signed in for about {left} more hour{'s' if left != 1 else ''}")
             if st.button("Sign out"):
                 st.session_state.pop("user", None)
+                st.query_params.pop("s", None)
                 st.rerun()
 
 
@@ -1227,6 +1469,7 @@ def main() -> None:
              st.Page(history_page, title="History", icon="📈")]
     pg = st.navigation(pages, position="hidden" if tv else "sidebar")
     if not tv:
+        keep_signed_in()
         sidebar()
     show_flash()
     pg.run()
