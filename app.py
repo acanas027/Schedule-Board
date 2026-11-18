@@ -52,7 +52,7 @@ STATUS_STYLE = {  # background, border, text, tag
     "Running": ("#dcf5e3", "#188038", "#0d5223", "RUNNING"),
     "Finished": ("#eceff3", "#c3c9d2", "#7a8594", "DONE"),
 }
-REASONS = ["Ran out of time", "Mechanical issues", "Rework other product", "No material", "Short staffed", "Working on it"]
+REASONS = ["Ran out of time", "Mechanical issues", "Rework other product", "No packing material", "Short staffed", "Working on it" , "No Food"]
 
 SHIFTS = ["1st", "2nd"]                 # in start-time order
 SHIFT_START = {"1st": 6, "2nd": 16}     # hour (24h) each shift starts
