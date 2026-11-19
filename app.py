@@ -234,6 +234,7 @@ ES = {
     "**Sign in to update the board**": "**Inicia sesión para actualizar el tablero**", "Name": "Nombre",
     "Pick your name": "Elige tu nombre", "Sign in": "Entrar", "Wrong name or PIN.": "Nombre o PIN incorrecto.",
     "Your sign-in expired — sign in again.": "Tu sesión expiró — vuelve a entrar.",
+    "Only planners can see the history.": "Solo los planeadores pueden ver el historial.",
     "Only planners can set up the board. Use **Update** to change recipe status.":
         "Solo los planeadores pueden armar el tablero. Usa **Actualizar** para cambiar el estado de las recetas.",
     "Signed in for about {n} more hours": "Sesión activa por unas {n} horas más",
@@ -1188,13 +1189,13 @@ def keep_signed_in() -> None:
         qp["s"] = u["token"]  # keep the token in the URL on every page so a refresh stays signed in
 
 
-def need_user(core: dict, roles=None) -> dict | None:
+def need_user(core: dict, roles=None, denied: str = "Only planners can set up the board. Use **Update** to change recipe status.") -> dict | None:
     u = st.session_state.get("user")
     if not u:
         login_form(core)
         return None
     if roles and u["role"] not in roles:
-        st.warning(_("Only planners can set up the board. Use **Update** to change recipe status."))
+        st.warning(_(denied))
         return None
     return u
 
@@ -1731,6 +1732,8 @@ h1{{font-size:22px;margin:0 0 2px}} h2{{font-size:15px;margin:22px 0 8px}} .sub,
 
 def history_page() -> None:
     st.title(_("📈 History"))
+    if not need_user(load_core(), roles=PLANNER_ROLES, denied="Only planners can see the history."):
+        return
     today = now().date()
     c1, c2, c3 = st.columns([1, 1, 3])
     start = c1.date_input(_("From"), today - timedelta(days=6), format="MM/DD/YYYY")
