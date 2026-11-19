@@ -132,7 +132,9 @@ def next_slot(d: date, shift: str) -> tuple[date, str]:
 
 
 def slot_label(d: date, shift: str) -> str:
-    return f"{d:%a %b} {d.day} · {shift} shift"
+    if lang() == "es":
+        return f"{fmt_date(d)} · {shift_name(shift)} turno"
+    return f"{fmt_date(d)} · {shift} shift"
 
 
 def parse_entries(text: str) -> list[tuple[str, str]]:
@@ -196,6 +198,208 @@ def show_flash() -> None:
 
 def is_tv() -> bool:
     return str(st.query_params.get("tv", "")).lower() in ("1", "true", "yes")
+
+
+# ── Language (per device: English / Español) ───────────────────────────────────
+# Stored data (statuses, reasons, line names in the sheet) stays in English; only what's shown is translated.
+# To change a Spanish wording, edit it here.
+ES = {
+    # statuses / tags
+    "Not ready": "No listo", "Ready": "Listo", "Next": "Siguiente", "Running": "Corriendo", "Finished": "Terminado",
+    "NOT READY": "NO LISTO", "READY": "LISTO", "NEXT": "SIGUE", "RUNNING": "ACTIVO", "DONE": "HECHO",
+    # reasons
+    "Ran out of time": "Se acabó el tiempo", "Mechanical issues": "Problemas mecánicos",
+    "Rework other product": "Retrabajo de otro producto", "No packing material": "Sin material de empaque",
+    "Short staffed": "Falta de personal", "Working on it": "Trabajando en ello", "No Food": "Sin comida",
+    "No material": "Sin material", "No reason given": "Sin razón",
+    "No Material": "Sin material", "No Staff": "Sin personal", "Mechanical Issues": "Problemas mecánicos",
+    "Not Scheduled": "No programada",
+    # default goals
+    "Pounds": "Libras", "Units": "Unidades", "Units Per Hour": "Unidades por hora", "Cases Per Day": "Cajas por día",
+    # board
+    "Schedule Board": "Tablero de producción", "★ PRIORITY": "★ PRIORIDAD", "✕ DOWN": "✕ PARADA",
+    "✅ {a}/{b} done": "✅ {a}/{b} terminadas", "🟢 {n} running": "🟢 {n} corriendo", "🟡 {n} next": "🟡 {n} siguientes",
+    "🔴 {n} not ready": "🔴 {n} no listas", "✕ {n} line down": "✕ {n} línea parada", "✕ {n} lines down": "✕ {n} líneas paradas",
+    "Daily goals": "Metas diarias", "No updates yet": "Sin actualizaciones", "Live · updated {t}": "En vivo · actualizado {t}",
+    "Notes": "Notas", "Latest from the floor": "Últimas del piso",
+    "Shift ended {t} by {who} — {n} carried to next shift": "Turno cerrado {t} por {who} — {n} pasadas al siguiente turno",
+    "{slot} not ended — was due {due} ({m} min late)": "{slot} sin cerrar — vencía {due} ({m} min tarde)",
+    "{slot} must be ended by {due} ({m} min left)": "{slot} debe cerrarse antes de {due} (faltan {m} min)",
+    # pickers / sign-in
+    "Date": "Fecha", "Shift": "Turno", "Board": "Tablero", "Update": "Actualizar", "Plan": "Planear", "History": "Historial",
+    "No leads set up yet. Add people to the **leads** tab of the Google Sheet: `name`, `pin`, `role` (lead / planner), "
+    "`lines` (e.g. `1, 2, Cole Slaw` or `ALL`), `active` (TRUE).":
+        "Todavía no hay líderes. Agrega personas en la pestaña **leads** del Google Sheet: `name`, `pin`, `role` "
+        "(lead / planner), `lines` (ej. `1, 2, Cole Slaw` o `ALL`), `active` (TRUE).",
+    "**Sign in to update the board**": "**Inicia sesión para actualizar el tablero**", "Name": "Nombre",
+    "Pick your name": "Elige tu nombre", "Sign in": "Entrar", "Wrong name or PIN.": "Nombre o PIN incorrecto.",
+    "Your sign-in expired — sign in again.": "Tu sesión expiró — vuelve a entrar.",
+    "Only planners can set up the board. Use **Update** to change recipe status.":
+        "Solo los planeadores pueden armar el tablero. Usa **Actualizar** para cambiar el estado de las recetas.",
+    "Signed in for about {n} more hours": "Sesión activa por unas {n} horas más",
+    "Signed in for about {n} more hour": "Sesión activa por {n} hora más", "Sign out": "Salir",
+    "lead": "líder", "planner": "planeador", "admin": "admin", "Language": "Idioma",
+    # update page
+    "✏️ Update the floor": "✏️ Actualizar el piso", "Lines": "Líneas", "🔄 Refresh": "🔄 Recargar",
+    "🔚 End shift & carry over": "🔚 Cerrar turno y pasar pendientes",
+    "At the end of the shift: everything not Finished moves to the next shift's board":
+        "Al final del turno: todo lo que no esté Terminado pasa al tablero del siguiente turno",
+    "No lines could be read for you. In the **leads** tab, column **lines** should look like `1-9`, `7, 8, 9` or `ALL` "
+    "(format the column as Plain text). Then sign out and back in.":
+        "No se pudieron leer tus líneas. En la pestaña **leads**, la columna **lines** debe verse como `1-9`, `7, 8, 9` "
+        "o `ALL` (formato texto sin formato). Luego sal y vuelve a entrar.",
+    "Nothing is on the board for this shift yet. A planner sets it up on the **Plan** page — or add recipes below.":
+        "Todavía no hay nada en el tablero de este turno. Un planeador lo arma en la página **Planear** — o agrega recetas abajo.",
+    "{a}/{b} done": "{a}/{b} terminadas", " · ★ priority": " · ★ prioridad", " · ✕ down: {r}": " · ✕ parada: {r}",
+    "Line down": "Línea parada", "Add recipe": "Agregar receta",
+    "Add recipe — e.g. PO 379 or CS 131 x6": "Agregar receta — ej. PO 379 o CS 131 x6", "➕ Add": "➕ Agregar",
+    "Added {n} to {line}": "{n} agregadas a {line}", "Status": "Estado",
+    "{r} → {s}": "{r} → {s}", "That recipe was removed or changed by someone else — board refreshed.":
+        "Otra persona quitó o cambió esa receta — se recargó el tablero.",
+    "Couldn't save — {e}": "No se pudo guardar — {e}",
+    "Why is it not ready?": "¿Por qué no está lista?", "Reason (required)": "Razón (obligatoria)",
+    "Pick a reason": "Elige una razón", "Comment (optional)": "Comentario (opcional)", "Save": "Guardar",
+    "Pick a reason first.": "Primero elige una razón.", "Cancel": "Cancelar",
+    "{r} → Not ready ({why})": "{r} → No listo ({why})",
+    "Why is the line down?": "¿Por qué está parada la línea?", "{line} is down — {why}": "{line} está parada — {why}",
+    "💬 Comments": "💬 Comentarios", "Reason and comment — carried to the next shift":
+        "Razón y comentario — pasan al siguiente turno",
+    "**Comments · {r}**": "**Comentarios · {r}**", "Reason": "Razón", "Comment": "Comentario",
+    "What happened, what's needed…": "Qué pasó, qué se necesita…", "Not ready needs a reason.": "No listo necesita una razón.",
+    "Comments saved on {r}": "Comentarios guardados en {r}",
+    "↔ Move": "↔ Mover", "Move this recipe to another line": "Mover esta receta a otra línea",
+    "**Move {r}** from {line}": "**Mover {r}** de {line}", "To line": "A la línea", "Pick a line": "Elige una línea",
+    "Put it": "Ponerla", "Last in line": "Al final", "First in line": "Al principio", "Move": "Mover",
+    "Pick a line.": "Elige una línea.", "{r} moved to {line}": "{r} movida a {line}",
+    "End shift & carry over": "Cerrar turno y pasar pendientes",
+    "Everything on this board is finished or already carried over.": "Todo en este tablero está terminado o ya se pasó.",
+    "🔚 End shift": "🔚 Cerrar turno", "{slot} ended": "{slot} cerrado",
+    "These **{n}** recipes didn't finish. They'll move to the top of **{slot}** with their status, reason and comment. "
+    "Finished recipes stay on this shift's record.":
+        "Estas **{n}** recetas no se terminaron. Pasarán arriba de **{slot}** con su estado, razón y comentario. "
+        "Las terminadas se quedan en el registro de este turno.",
+    "↪ Carry over to {slot}": "↪ Pasar a {slot}",
+    "Pick a reason for every recipe — missing {n}: ": "Elige una razón para cada receta — faltan {n}: ",
+    "Shift ended — {n} recipes carried to {slot}": "Turno cerrado — {n} recetas pasadas a {slot}",
+    "⏰ End the shift": "⏰ Cierra el turno",
+    "**{slot}** hasn't been ended. It was due at **{due}** — {m} min late.":
+        "**{slot}** no se ha cerrado. Vencía a las **{due}** — {m} min tarde.",
+    "**{slot}** must be ended by **{due}** — {m} min left.": "**{slot}** debe cerrarse antes de las **{due}** — faltan {m} min.",
+    "Press **End shift & carry over** so the next shift gets its board with everything that didn't finish and why.":
+        "Presiona **Cerrar turno y pasar pendientes** para que el siguiente turno reciba su tablero con todo lo que "
+        "no se terminó y por qué.",
+    "🔚 End shift now": "🔚 Cerrar turno ahora", "Remind me in 5 min": "Recordar en 5 min",
+    # plan page
+    "🗓️ Plan the board": "🗓️ Planear el tablero", "⧉ Copy last board": "⧉ Copiar último tablero",
+    "Copied {slot} — review and **Save board**.": "Se copió {slot} — revisa y **Guarda el tablero**.",
+    "No earlier board found in the last two weeks.": "No hay tableros anteriores en las últimas dos semanas.",
+    "↺ Discard edits": "↺ Descartar cambios", "🗑️ Clear board": "🗑️ Borrar tablero",
+    "Remove every recipe, line down / priority and notes from this shift's board":
+        "Quitar todas las recetas, líneas paradas / prioridad y notas del tablero de este turno",
+    "Clear the board?": "¿Borrar el tablero?",
+    "This removes **everything** from **{slot}**: {n} recipes, lines down / priority and the notes. "
+    "The board starts blank.": "Esto quita **todo** de **{slot}**: {n} recetas, líneas paradas / prioridad y las notas. "
+                               "El tablero queda en blanco.",
+    "The previous shift's record is kept, and every removed recipe is saved in the activity log.":
+        "El registro del turno anterior se conserva y cada receta quitada queda en el registro de actividad.",
+    "🗑️ Yes, clear it": "🗑️ Sí, borrar", "The board is already blank.": "El tablero ya está en blanco.",
+    "{slot} cleared — {n} recipes removed": "{slot} borrado — {n} recetas quitadas",
+    "One recipe per row (or comma-separated), in run order. Add `x6` for batches. To mark a line down, pick its reason "
+    "in the box under it (leave it on *Running* otherwise). Recipes already on the board (including ones carried over "
+    "from last shift) keep their status when you save.":
+        "Una receta por renglón (o separadas por coma), en orden de corrida. Agrega `x6` para baches. Para marcar una "
+        "línea parada, elige la razón en la caja de abajo (déjala en *Corriendo* si no). Las recetas que ya están en el "
+        "tablero (incluyendo las del turno anterior) conservan su estado al guardar.",
+    "Line down?": "¿Línea parada?", "Priority lines": "Líneas prioritarias",
+    "Board notes (everyone sees these)": "Notas del tablero (todos las ven)",
+    "High protein items, reminders…": "Productos altos en proteína, recordatorios…", "💾 Save board": "💾 Guardar tablero",
+    "Board saved — {a} added, {r} removed": "Tablero guardado — {a} agregadas, {r} quitadas",
+    "🎯 Daily goals (side panel)": "🎯 Metas diarias (panel lateral)", "label": "meta", "value": "valor",
+    "Save goals": "Guardar metas", "Goals saved": "Metas guardadas",
+    # history
+    "📈 History": "📈 Historial", "From": "Desde", "To": "Hasta", "All lines": "Todas las líneas",
+    "'From' is after 'To'.": "'Desde' es después de 'Hasta'.", "No boards in this range yet.": "Todavía no hay tableros en estas fechas.",
+    "Nothing planned for these lines in this range.": "Nada planeado para estas líneas en estas fechas.",
+    "Recipes planned": "Recetas planeadas", "Not finished": "No terminadas", "Carried to next shift": "Pasadas al siguiente turno",
+    "Why recipes didn't finish (carry-over reasons)": "Por qué no se terminaron (razones)",
+    "Everything planned was finished. 🎉": "Todo lo planeado se terminó. 🎉", "Everything planned was finished.": "Todo lo planeado se terminó.",
+    "Recipes": "Recetas", "Finish rate by line": "% terminado por línea", "Finish %": "% terminado", "By shift": "Por turno",
+    "Planned": "Planeadas", "Line": "Línea", "#": "#", "Recipe": "Receta", "Qty": "Cant.", "Carried over": "Pasada",
+    "Started": "Inició", "Run (min)": "Duración (min)", "Last update by": "Última actualización por", "Yes": "Sí",
+    "⬇ Download recipes (CSV)": "⬇ Descargar recetas (CSV)", "Activity log (every status change)": "Registro de actividad (cada cambio)",
+    "No activity yet.": "Todavía no hay actividad.", "⬇ Download log (CSV)": "⬇ Descargar registro (CSV)",
+    "Schedule Board — History": "Tablero de producción — Historial", "printed": "impreso",
+    "Nothing to show.": "Nada que mostrar.", "🖨️ Print summary": "🖨️ Imprimir resumen",
+}
+_ES_DAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
+_ES_MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+LANG_COOKIE = "sb_lang"
+
+
+def lang() -> str:
+    try:
+        return st.session_state.get("lang", "en")
+    except Exception:
+        return "en"
+
+
+def _(text: str, **kw) -> str:
+    """Translate a UI string for this device (and fill in {placeholders})."""
+    out = ES.get(text, text) if lang() == "es" else text
+    return out.format(**kw) if kw else out
+
+
+def line_name(line_id: str) -> str:
+    lbl = LINE_LABEL.get(line_id, line_id)
+    return lbl.replace("Line ", "Línea ") if lang() == "es" else lbl
+
+
+def shift_name(shift: str) -> str:
+    return {"1st": "1er", "2nd": "2do", "3rd": "3er"}.get(shift, shift) if lang() == "es" else shift
+
+
+def fmt_date(d: date, weekday: bool = True) -> str:
+    if lang() == "es":
+        return (f"{_ES_DAYS[d.weekday()]} " if weekday else "") + f"{d.day} {_ES_MONTHS[d.month - 1]}"
+    return (f"{d:%a} " if weekday else "") + f"{d:%b} {d.day}"
+
+
+def init_lang() -> None:
+    """Language for this device: the ?lang= link wins, then this browser's saved choice, then English."""
+    ss, qp = st.session_state, st.query_params
+    want = qp.get("lang")
+    if want not in ("en", "es"):
+        want = ss.get("lang")
+    if want not in ("en", "es"):
+        try:
+            want = st.context.cookies.get(LANG_COOKIE)
+        except Exception:
+            want = None
+    ss["lang"] = want if want in ("en", "es") else "en"
+    if ss["lang"] == "es" and qp.get("lang") != "es":
+        qp["lang"] = "es"  # keep it in the link so refresh / page changes stay in Spanish
+    elif ss["lang"] == "en" and "lang" in qp:
+        qp.pop("lang", None)
+
+
+def on_lang_change() -> None:
+    pick = st.session_state.get("_lang_pick")
+    if pick in ("en", "es"):
+        st.session_state["lang"] = pick
+        st.session_state["_save_lang_cookie"] = pick
+        if pick == "es":
+            st.query_params["lang"] = "es"
+        else:
+            st.query_params.pop("lang", None)
+
+
+def save_lang_cookie() -> None:
+    """Remember the choice in this browser (1 year) so the device opens in that language next time."""
+    pick = st.session_state.pop("_save_lang_cookie", None)
+    if pick:
+        components.html(f"<script>document.cookie='{LANG_COOKIE}={pick}; max-age=31536000; path=/; SameSite=Lax';"
+                        f"try{{window.parent.document.cookie='{LANG_COOKIE}={pick}; max-age=31536000; path=/; SameSite=Lax'}}catch(e){{}}"
+                        "</script>", height=0)
 
 
 # ── Storage: Google Sheets, or in-memory demo ──────────────────────────────────
@@ -471,7 +675,8 @@ def closed_text(row: dict) -> str:
     if not row.get("closed_at"):
         return ""
     t = datetime.strptime(row["closed_at"], "%Y-%m-%d %H:%M:%S")
-    return f"Shift ended {t:%-I:%M %p} by {row.get('closed_by', '')} — {row.get('carried_count') or 0} carried to next shift"
+    return _("Shift ended {t} by {who} — {n} carried to next shift", t=f"{t:%-I:%M %p}", who=row.get("closed_by", ""),
+             n=row.get("carried_count") or 0)
 
 
 def close_deadline(d: date, shift: str) -> datetime:
@@ -497,8 +702,8 @@ def close_reminder(core: dict) -> dict | None:
 def reminder_text(r: dict) -> str:
     due = f"{r['deadline']:%-I:%M %p}"
     if r["overdue"]:
-        return f"{slot_label(r['d'], r['s'])} not ended — was due {due} ({r['mins']} min late)"
-    return f"{slot_label(r['d'], r['s'])} must be ended by {due} ({r['mins']} min left)"
+        return _("{slot} not ended — was due {due} ({m} min late)", slot=slot_label(r["d"], r["s"]), due=due, m=r["mins"])
+    return _("{slot} must be ended by {due} ({m} min left)", slot=slot_label(r["d"], r["s"]), due=due, m=r["mins"])
 
 
 def month_range(a: date, b: date) -> list[str]:
@@ -535,7 +740,7 @@ def update_item(item: dict, changes: dict, user: str, action: str) -> bool:
     ids = s.col_values(tab)
     if item["id"] not in ids:
         refresh()
-        flash("That recipe was removed or changed by someone else — board refreshed.", "warn")
+        flash(_("That recipe was removed or changed by someone else — board refreshed."), "warn")
         return False
     r = ids.index(item["id"]) + 1
     t = stamp()
@@ -559,7 +764,7 @@ def move_item(item: dict, to_line: str, first: bool, target: pd.DataFrame, user:
     ids = s.col_values(tab)
     if item["id"] not in ids:
         refresh()
-        flash("That recipe was removed or changed by someone else — board refreshed.", "warn")
+        flash(_("That recipe was removed or changed by someone else — board refreshed."), "warn")
         return False
     col = {c: SCHED_COLS.index(c) + 1 for c in SCHED_COLS}
     cells = []
@@ -715,11 +920,41 @@ def save_flags(d: date, shift: str, desired: dict, current: dict, user: str) -> 
     return True
 
 
+def clear_board(d: date, shift: str, user: str) -> int:
+    """Start from scratch: remove every recipe, line down / priority and the notes from one shift's board.
+    Recipes are marked deleted (not erased) and each one is logged, so nothing is lost from the record."""
+    refresh()
+    items = board_items(load_sched(mk(d)), d, shift)
+    core = load_core()
+    flags, notes = line_flags(core["lineday"], d, shift), board_notes(core["boards"], d, shift)
+    s, n, t = store(), 0, stamp()
+    if not items.empty:
+        tab = sched_tab(d)
+        row_of = {v: i + 1 for i, v in enumerate(s.col_values(tab))}
+        col = {c: SCHED_COLS.index(c) + 1 for c in SCHED_COLS}
+        cells, logs = [], []
+        for e in items.to_dict("records"):
+            r = row_of.get(e["id"])
+            if r:
+                cells += [(r, col["deleted"], True), (r, col["updated_by"], user), (r, col["updated_at"], t)]
+                logs.append(item_log(e, "cleared (board started from scratch)", user))
+        s.update_cells(tab, cells)
+        write_logs(logs)
+        n = len(logs)
+    if any(f.get("down") or f.get("priority") for f in flags.values()):
+        save_flags(d, shift, {}, flags, user)
+    if notes.strip():
+        upsert("boards", BOARD_COLS, [{"key": board_key(d, shift), "date": d.isoformat(), "shift": shift,
+                                       "notes": "", "updated_by": user, "updated_at": t}])
+    refresh()
+    return n
+
+
 def safe(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except Exception as e:  # Sheets/API errors shouldn't crash the floor tablet
-        flash(f"Couldn't save — {e}", "err")
+        flash(_("Couldn't save — {e}", e=e), "err")
         return None
 
 
@@ -789,22 +1024,22 @@ def _card(line: str, items: pd.DataFrame, flags: dict) -> str:
     li = items[items["line"] == line] if not items.empty else items
     cls = "card" + (" down" if f.get("down") else "") + (" prio" if f.get("priority") else "")
     n, done = len(li), int((li["status"] == "Finished").sum()) if len(li) else 0
-    out = [f'<div class="{cls}"><div class="ch"><span class="lbl">{e(LINE_LABEL[line])}</span>'
+    out = [f'<div class="{cls}"><div class="ch"><span class="lbl">{e(line_name(line))}</span>'
            f'{f"<span class=cnt>{done}/{n}</span>" if n else ""}</div>']
-    badges = '<span class="badge prio">★ PRIORITY</span>' if f.get("priority") else ""
+    badges = f'<span class="badge prio">{_("★ PRIORITY")}</span>' if f.get("priority") else ""
     if badges:
         out.append(f'<div class="badges">{badges}</div>')
     if f.get("down"):
-        out.append('<div class="downx">✕ DOWN</div>')
+        out.append(f'<div class="downx">{_("✕ DOWN")}</div>')
         if f.get("down_reason"):
-            out.append(f'<div class="downr">{e(f["down_reason"])}</div>')
+            out.append(f'<div class="downr">{e(_(f["down_reason"]))}</div>')
     for it in li.to_dict("records"):
         status = it["status"] if it["status"] in STATUS_STYLE else "Ready"
         bg, bd, fg, tag = STATUS_STYLE[status]
         qty = f' <span class="qty">×{e(it["qty"])}</span>' if it["qty"] else ""
         out.append(f'<div class="item s-{status.lower().replace(" ", "-")}" style="background:{bg};border-color:{bd};color:{fg}">'
-                   f'<span class="rec">{e(it["recipe"])}{qty}</span><span class="tag">{tag}{" ↪" if truthy(it["carried"]) else ""}</span></div>')
-        sub = ([f"<b>{e(it['reason'])}</b>"] if it["reason"] else []) + ([e(it["comment"])] if it["comment"] else [])
+                   f'<span class="rec">{e(it["recipe"])}{qty}</span><span class="tag">{_(tag)}{" ↪" if truthy(it["carried"]) else ""}</span></div>')
+        sub = ([f"<b>{e(_(it['reason']))}</b>"] if it["reason"] else []) + ([e(it["comment"])] if it["comment"] else [])
         if sub:
             out.append(f'<div class="cmt">{" · ".join(sub)}</div>')
     if not n and not f.get("down"):
@@ -818,52 +1053,56 @@ def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: s
     e = html.escape
     st_counts = items["status"].value_counts() if not items.empty else pd.Series(dtype=int)
     total = len(items)
-    kpis = [("Finished", f"✅ {int(st_counts.get('Finished', 0))}/{total} done"),
-            ("Running", f"🟢 {int(st_counts.get('Running', 0))} running"),
-            ("Next", f"🟡 {int(st_counts.get('Next', 0))} next"),
-            ("Not ready", f"🔴 {int(st_counts.get('Not ready', 0))} not ready")]
+    kpis = [("Finished", _("✅ {a}/{b} done", a=int(st_counts.get("Finished", 0)), b=total)),
+            ("Running", _("🟢 {n} running", n=int(st_counts.get("Running", 0)))),
+            ("Next", _("🟡 {n} next", n=int(st_counts.get("Next", 0)))),
+            ("Not ready", _("🔴 {n} not ready", n=int(st_counts.get("Not ready", 0))))]
     downs = sum(1 for f in flags.values() if f.get("down"))
     kpi_html = "".join(f'<span class="kpi" style="background:{STATUS_STYLE[s][0]};border-color:{STATUS_STYLE[s][1]};'
                        f'color:{STATUS_STYLE[s][2]}">{t}</span>' for s, t in kpis)
     if downs:
-        kpi_html += f'<span class="kpi" style="background:#f1f3f6;border-color:#9aa3ae;color:#4b5563">✕ {downs} line{"s" if downs > 1 else ""} down</span>'
+        kpi_html += (f'<span class="kpi" style="background:#f1f3f6;border-color:#9aa3ae;color:#4b5563">'
+                     f'{_("✕ {n} lines down" if downs > 1 else "✕ {n} line down", n=downs)}</span>')
     if closed:
         kpi_html += f'<span class="kpi" style="background:#1f2a37;border-color:#1f2a37;color:#fff">↪ {e(closed)}</span>'
     if alert:
         kpi_html += f'<span class="kpi alert">⏰ {e(alert)}</span>'
 
-    goal_rows = "".join(f'<div class="goal"><span>{e(str(g["label"]))}</span><b>{e(str(g["value"]))}</b></div>'
+    goal_rows = "".join(f'<div class="goal"><span>{e(_(str(g["label"])))}</span><b>{e(str(g["value"]))}</b></div>'
                         for g in goals.to_dict("records")) if not goals.empty else '<div class="empty">—</div>'
     side = "".join(_card(ln, items, flags) for ln in SIDE_LINES) + \
-        f'<div class="panel"><div class="ph">Daily goals</div>{goal_rows}</div>'
+        f'<div class="panel"><div class="ph">{_("Daily goals")}</div>{goal_rows}</div>'
 
     feed_items = items[(items["updated_at"] != items["created_at"])] if not items.empty else items
     feed_items = feed_items.sort_values("updated_at", ascending=False).head(10) if not feed_items.empty else feed_items
     feed = "".join(
-        f'<div><time>{e(r["updated_at"][11:16])}</time><b>{e(LINE_LABEL.get(r["line"], r["line"]))}</b> · '
-        f'{e(r["recipe"])} → {ICON.get(r["status"], "")} {e(r["status"])}'
+        f'<div><time>{e(r["updated_at"][11:16])}</time><b>{e(line_name(r["line"]))}</b> · '
+        f'{e(r["recipe"])} → {ICON.get(r["status"], "")} {e(_(r["status"]))}'
         f'{" — " + e(r["comment"]) if r["comment"] else ""} <span class="who">({e(r["updated_by"])})</span></div>'
-        for r in feed_items.to_dict("records")) or '<div class="empty" style="padding:6px 0">No updates yet</div>'
+        for r in feed_items.to_dict("records")) or f'<div class="empty" style="padding:6px 0">{_("No updates yet")}</div>'
     legend = "".join(f'<span style="background:{STATUS_STYLE[s][0]};border-color:{STATUS_STYLE[s][1]};'
-                     f'color:{STATUS_STYLE[s][2]}">{s}</span>' for s in STATUSES)
+                     f'color:{STATUS_STYLE[s][2]}">{_(s)}</span>' for s in STATUSES)
 
     return (f'{BOARD_CSS}<div class="sb{" tv" if tv else ""}">'
-            f'<div class="sb-head"><div class="sb-title">Schedule Board<span>{e(slot_label(d, shift))}</span></div>'
+            f'<div class="sb-head"><div class="sb-title">{_("Schedule Board")}<span>{e(slot_label(d, shift))}</span></div>'
             f'<div class="kpis">{kpi_html}</div>'
-            f'<div class="live"><span class="dot"></span>Live · updated {now().strftime("%-I:%M:%S %p")}</div></div>'
+            f'<div class="live"><span class="dot"></span>{_("Live · updated {t}", t=now().strftime("%-I:%M:%S %p"))}</div></div>'
             f'<div class="sb-main"><div class="sb-grid">{"".join(_card(ln, items, flags) for ln in GRID_LINES)}</div>'
             f'<div class="sb-side">{side}</div></div>'
-            f'<div class="sb-foot"><div class="panel"><div class="ph">Notes</div><div class="notes">{e(notes) or "—"}</div>'
+            f'<div class="sb-foot"><div class="panel"><div class="ph">{_("Notes")}</div><div class="notes">{e(notes) or "—"}</div>'
             f'<div class="legend">{legend}</div></div>'
-            f'<div class="panel feed"><div class="ph">Latest from the floor</div>{feed}</div></div></div>')
+            f'<div class="panel feed"><div class="ph">{_("Latest from the floor")}</div>{feed}</div></div></div>')
 
 
 # ── Shared UI pieces ───────────────────────────────────────────────────────────
 def board_picker(key: str) -> tuple[date, str]:
     cd, cs = current_board()
-    c1, c2, _ = st.columns([1.3, 1, 4])
-    d = c1.date_input("Date", cd, key=f"{key}_date", format="MM/DD/YYYY")
-    shift = c2.selectbox("Shift", SHIFTS, index=SHIFTS.index(cs), key=f"{key}_shift")
+    c1, c2, _sp = st.columns([1.3, 1, 4])
+    d = c1.date_input(_("Date"), cd, key=f"{key}_date", format="MM/DD/YYYY")
+    prev = st.session_state.get(f"{key}_shift_val", cs)  # keep the pick when the language (and widget key) changes
+    shift = c2.selectbox(_("Shift"), SHIFTS, index=SHIFTS.index(prev) if prev in SHIFTS else 0,
+                         key=f"{key}_shift_{lang()}", format_func=shift_name)
+    st.session_state[f"{key}_shift_val"] = shift
     return d, shift
 
 
@@ -873,14 +1112,14 @@ def login_form(core: dict) -> None:
         leads = leads[leads["active"].map(lambda x: str(x).strip() == "" or truthy(x))]
     names = sorted(leads["name"].astype(str).str.strip().unique().tolist()) if not leads.empty else []
     if not names:
-        st.info("No leads set up yet. Add people to the **leads** tab of the Google Sheet: "
-                "`name`, `pin`, `role` (lead / planner), `lines` (e.g. `1, 2, Cole Slaw` or `ALL`), `active` (TRUE).")
+        st.info(_("No leads set up yet. Add people to the **leads** tab of the Google Sheet: "
+                  "`name`, `pin`, `role` (lead / planner), `lines` (e.g. `1, 2, Cole Slaw` or `ALL`), `active` (TRUE)."))
         return
     with st.form("login", border=True):
-        st.markdown("**Sign in to update the board**")
-        name = st.selectbox("Name", names, index=None, placeholder="Pick your name")
+        st.markdown(_("**Sign in to update the board**"))
+        name = st.selectbox(_("Name"), names, index=None, placeholder=_("Pick your name"))
         pin = st.text_input("PIN", type="password", max_chars=12)
-        if st.form_submit_button("Sign in", type="primary"):
+        if st.form_submit_button(_("Sign in"), type="primary"):
             row = leads[leads["name"].astype(str).str.strip() == name] if name else leads.iloc[0:0]
             if not row.empty and pin_ok(pin, row.iloc[0]["pin"]):
                 exp = int(time.time() + SESSION_HOURS * 3600)
@@ -888,7 +1127,7 @@ def login_form(core: dict) -> None:
                 st.session_state["user"] = u
                 st.query_params["s"] = u["token"]
                 st.rerun()
-            st.error("Wrong name or PIN.")
+            st.error(_("Wrong name or PIN."))
 
 
 # ── Staying signed in: a signed token in the URL (?s=…) survives refresh for SESSION_HOURS ──
@@ -937,7 +1176,7 @@ def keep_signed_in() -> None:
     if u and time.time() > u["exp"]:
         ss.pop("user", None)
         qp.pop("s", None)
-        flash("Your sign-in expired — sign in again.", "warn")
+        flash(_("Your sign-in expired — sign in again."), "warn")
         return
     if not u and qp.get("s"):
         u = user_from_token(qp["s"], load_core()["leads"])
@@ -955,7 +1194,7 @@ def need_user(core: dict, roles=None) -> dict | None:
         login_form(core)
         return None
     if roles and u["role"] not in roles:
-        st.warning("Only planners can set up the board. Use **Update** to change recipe status.")
+        st.warning(_("Only planners can set up the board. Use **Update** to change recipe status."))
         return None
     return u
 
@@ -993,11 +1232,11 @@ def on_status(item: dict, key: str, user: str) -> None:
     if item["status"] == "Not ready":
         ch["reason"] = ""
     if safe(update_item, item, ch, user, "status"):
-        flash(f"{item['recipe']} → {new}")
+        flash(_("{r} → {s}", r=item["recipe"], s=_(new)))
 
 
 def status_key(it: dict) -> str:
-    return f"st_{it['id']}_{it['updated_at']}_{st.session_state.get('nonce_' + it['id'], 0)}"
+    return f"st_{it['id']}_{it['updated_at']}_{st.session_state.get('nonce_' + it['id'], 0)}_{lang()}"
 
 
 def reset_status_widget(item_id: str) -> None:
@@ -1011,26 +1250,29 @@ def cancel_notready() -> None:
         reset_status_widget(p["item"]["id"])
 
 
-@st.dialog("Why is it not ready?", on_dismiss=cancel_notready)
 def notready_dialog() -> None:
+    st.dialog(_("Why is it not ready?"), on_dismiss=cancel_notready)(_notready_body)()
+
+
+def _notready_body() -> None:
     p = st.session_state.get("_notready")
     if not p:
         return
     it = p["item"]
-    st.markdown(f"**{LINE_LABEL.get(it['line'], it['line'])} · {it['recipe']}**")
-    reason = st.selectbox("Reason (required)", REASONS, index=None, placeholder="Pick a reason")
-    comment = st.text_area("Comment (optional)", it["comment"], height=80)
+    st.markdown(f"**{line_name(it['line'])} · {it['recipe']}**")
+    reason = st.selectbox(_("Reason (required)"), REASONS, index=None, placeholder=_("Pick a reason"), format_func=_)
+    comment = st.text_area(_("Comment (optional)"), it["comment"], height=80)
     c1, c2 = st.columns(2)
-    if c1.button("Save", type="primary", width="stretch"):
+    if c1.button(_("Save"), type="primary", width="stretch"):
         if not reason:
-            st.error("Pick a reason first.")
+            st.error(_("Pick a reason first."))
             return
         st.session_state.pop("_notready", None)
         if safe(update_item, it, {"status": "Not ready", "reason": reason, "comment": comment.strip()},
                 p["user"], "status"):
-            flash(f"{it['recipe']} → Not ready ({reason})")
+            flash(_("{r} → Not ready ({why})", r=it["recipe"], why=_(reason)))
         st.rerun()
-    if c2.button("Cancel", width="stretch"):
+    if c2.button(_("Cancel"), width="stretch"):
         cancel_notready()
         st.rerun()
 
@@ -1051,26 +1293,29 @@ def cancel_down() -> None:
         reset_status_widget(f"down_{p['line']}")
 
 
-@st.dialog("Why is the line down?", on_dismiss=cancel_down)
 def down_dialog() -> None:
+    st.dialog(_("Why is the line down?"), on_dismiss=cancel_down)(_down_body)()
+
+
+def _down_body() -> None:
     p = st.session_state.get("_down_pending")
     if not p:
         return
-    st.markdown(f"**{LINE_LABEL[p['line']]}** · {slot_label(p['d'], p['shift'])}")
-    reason = st.radio("Reason (required)", DOWN_REASONS, index=None)
+    st.markdown(f"**{line_name(p['line'])}** · {slot_label(p['d'], p['shift'])}")
+    reason = st.radio(_("Reason (required)"), DOWN_REASONS, index=None, format_func=_)
     c1, c2 = st.columns(2)
-    if c1.button("Save", type="primary", width="stretch"):
+    if c1.button(_("Save"), type="primary", width="stretch"):
         if not reason:
-            st.error("Pick a reason first.")
+            st.error(_("Pick a reason first."))
             return
         st.session_state.pop("_down_pending", None)
         desired = {ln: dict(v) for ln, v in p["flags"].items()}
         desired.setdefault(p["line"], {}).update(down=True, down_reason=reason)
         if safe(save_flags, p["d"], p["shift"], desired, p["flags"], p["user"]):
-            flash(f"{LINE_LABEL[p['line']]} is down — {reason}")
+            flash(_("{line} is down — {why}", line=line_name(p["line"]), why=_(reason)))
         refresh()
         st.rerun()
-    if c2.button("Cancel", width="stretch"):
+    if c2.button(_("Cancel"), width="stretch"):
         cancel_down()
         st.rerun()
 
@@ -1078,7 +1323,7 @@ def down_dialog() -> None:
 def item_row(it: dict, user: str, items: pd.DataFrame) -> None:
     c1, c2, c3, c4 = st.columns([1.6, 6.4, 1.7, 1.2], vertical_alignment="center")
     c1.markdown(f"**{it['recipe']}**" + (f" ×{it['qty']}" if it["qty"] else "") + (" ↪" if truthy(it["carried"]) else ""))
-    sub = " · ".join(x for x in (it["reason"], it["comment"]) if x)
+    sub = " · ".join(x for x in (_(it["reason"]) if it["reason"] else "", it["comment"]) if x)
     if sub:
         c1.caption(sub)
     key = status_key(it)
@@ -1086,79 +1331,83 @@ def item_row(it: dict, user: str, items: pd.DataFrame) -> None:
     if key in st.session_state and st.session_state[key] != it["status"] and not (pending and pending["key"] == key):
         reset_status_widget(it["id"])  # an unsaved pick (e.g. cancelled Not ready) snaps back
         key = status_key(it)
-    c2.segmented_control("Status", STATUSES, default=it["status"] if it["status"] in STATUSES else None,
-                         format_func=lambda s: f"{ICON[s]} {s}", key=key, label_visibility="collapsed",
+    c2.segmented_control(_("Status"), STATUSES, default=it["status"] if it["status"] in STATUSES else None,
+                         format_func=lambda s: f"{ICON[s]} {_(s)}", key=key, label_visibility="collapsed",
                          on_change=on_status, args=(it, key, user))
-    with c3.popover("💬 Comments", help="Reason and comment — carried to the next shift"):
+    with c3.popover(_("💬 Comments"), help=_("Reason and comment — carried to the next shift")):
         with st.form(f"note_{it['id']}_{it['updated_at']}", border=False):
-            st.markdown(f"**Comments · {it['recipe']}**")
-            reason = st.selectbox("Reason", REASONS, index=REASONS.index(it["reason"]) if it["reason"] in REASONS else None,
-                                  placeholder="Pick a reason")
-            comment = st.text_area("Comment", it["comment"], height=80, placeholder="What happened, what's needed…")
-            if st.form_submit_button("Save", type="primary"):
+            st.markdown(_("**Comments · {r}**", r=it["recipe"]))
+            reason = st.selectbox(_("Reason"), REASONS, index=REASONS.index(it["reason"]) if it["reason"] in REASONS else None,
+                                  placeholder=_("Pick a reason"), format_func=_)
+            comment = st.text_area(_("Comment"), it["comment"], height=80, placeholder=_("What happened, what's needed…"))
+            if st.form_submit_button(_("Save"), type="primary"):
                 if it["status"] == "Not ready" and not reason:
-                    st.error("Not ready needs a reason.")
+                    st.error(_("Not ready needs a reason."))
                     return
                 if safe(update_item, it, {"reason": reason or "", "comment": comment.strip()}, user, "note"):
-                    flash(f"Comments saved on {it['recipe']}")
+                    flash(_("Comments saved on {r}", r=it["recipe"]))
                 st.rerun()
-    with c4.popover("↔ Move", help="Move this recipe to another line"):
+    with c4.popover(_("↔ Move"), help=_("Move this recipe to another line")):
         with st.form(f"move_{it['id']}_{it['updated_at']}", border=False):
-            st.markdown(f"**Move {it['recipe']}** from {LINE_LABEL.get(it['line'], it['line'])}")
-            to = st.selectbox("To line", [ln for ln in LINE_IDS if ln != it["line"]], index=None,
-                              format_func=LINE_LABEL.get, placeholder="Pick a line")
-            first = st.radio("Put it", ["Last in line", "First in line"], horizontal=True) == "First in line"
-            if st.form_submit_button("Move", type="primary"):
+            st.markdown(_("**Move {r}** from {line}", r=it["recipe"], line=line_name(it["line"])))
+            to = st.selectbox(_("To line"), [ln for ln in LINE_IDS if ln != it["line"]], index=None,
+                              format_func=line_name, placeholder=_("Pick a line"))
+            first = st.radio(_("Put it"), ["Last in line", "First in line"], horizontal=True,
+                             format_func=_) == "First in line"
+            if st.form_submit_button(_("Move"), type="primary"):
                 if not to:
-                    st.error("Pick a line.")
+                    st.error(_("Pick a line."))
                     return
                 if safe(move_item, it, to, first, items[items["line"] == to], user):
-                    flash(f"{it['recipe']} moved to {LINE_LABEL[to]}")
+                    flash(_("{r} moved to {line}", r=it["recipe"], line=line_name(to)))
                 st.rerun()
 
 
-@st.dialog("End shift & carry over", width="large")
 def carryover_dialog(d: date, shift: str, user: str) -> None:
+    st.dialog(_("End shift & carry over"), width="large")(_carryover_body)(d, shift, user)
+
+
+def _carryover_body(d: date, shift: str, user: str) -> None:
     items = board_items(load_sched(mk(d)), d, shift)
     todo = items[(items["status"] != "Finished") & (~items["carried"].map(truthy))] if not items.empty else items
     nd, ns = next_slot(d, shift)
     if todo.empty:
-        st.success("Everything on this board is finished or already carried over.")
+        st.success(_("Everything on this board is finished or already carried over."))
         if not board_row(load_core()["boards"], d, shift).get("closed_at"):
-            if st.button("🔚 End shift", type="primary"):
+            if st.button(_("🔚 End shift"), type="primary"):
                 if safe(carry_over, d, shift, todo, {}, user):
-                    flash(f"{slot_label(d, shift)} ended")
+                    flash(_("{slot} ended", slot=slot_label(d, shift)))
                 st.rerun()
         return
-    st.markdown(f"These **{len(todo)}** recipes didn't finish. They'll move to the top of **{slot_label(nd, ns)}** "
-                "with their status, reason and comment. Finished recipes stay on this shift's record.")
+    st.markdown(_("These **{n}** recipes didn't finish. They'll move to the top of **{slot}** with their status, reason "
+                  "and comment. Finished recipes stay on this shift's record.", n=len(todo), slot=slot_label(nd, ns)))
     with st.form("carryover_form", border=False):
         for line in LINE_IDS:
             li = todo[todo["line"] == line]
             if li.empty:
                 continue
-            st.markdown(f"**{LINE_LABEL[line]}**")
+            st.markdown(f"**{line_name(line)}**")
             for it in li.to_dict("records"):
                 c1, c2, c3 = st.columns([1.6, 2, 3], vertical_alignment="center")
                 c1.markdown(f"{ICON.get(it['status'], '')} {it['recipe']}" + (f" ×{it['qty']}" if it["qty"] else ""))
-                c2.selectbox("Reason", REASONS, key=f"co_r_{it['id']}", label_visibility="collapsed",
+                c2.selectbox(_("Reason"), REASONS, key=f"co_r_{it['id']}", label_visibility="collapsed",
                              index=REASONS.index(it["reason"]) if it["reason"] in REASONS else None,
-                             placeholder="Reason (required)")
-                c3.text_input("Comment", it["comment"], key=f"co_c_{it['id']}", label_visibility="collapsed",
-                              placeholder="Comment (optional)")
-        go = st.form_submit_button(f"↪ Carry over to {slot_label(nd, ns)}", type="primary")
+                             placeholder=_("Reason (required)"), format_func=_)
+                c3.text_input(_("Comment"), it["comment"], key=f"co_c_{it['id']}", label_visibility="collapsed",
+                              placeholder=_("Comment (optional)"))
+        go = st.form_submit_button(_("↪ Carry over to {slot}", slot=slot_label(nd, ns)), type="primary")
     if go:
         ss = st.session_state
-        missing = [f"{LINE_LABEL[r['line']]} · {r['recipe']}" for r in todo.to_dict("records") if not ss.get(f"co_r_{r['id']}")]
+        missing = [f"{line_name(r['line'])} · {r['recipe']}" for r in todo.to_dict("records") if not ss.get(f"co_r_{r['id']}")]
         if missing:
-            st.error(f"Pick a reason for every recipe — missing {len(missing)}: " + ", ".join(missing[:8])
+            st.error(_("Pick a reason for every recipe — missing {n}: ", n=len(missing)) + ", ".join(missing[:8])
                      + ("…" if len(missing) > 8 else ""))
             return
         answers = {r["id"]: (ss[f"co_r_{r['id']}"], ss.get(f"co_c_{r['id']}", "").strip()) for r in todo.to_dict("records")}
         res = safe(carry_over, d, shift, todo, answers, user)
         if res:
             n, rd, rs = res
-            flash(f"Shift ended — {n} recipes carried to {slot_label(rd, rs)}")
+            flash(_("Shift ended — {n} recipes carried to {slot}", n=n, slot=slot_label(rd, rs)))
         st.rerun()
 
 
@@ -1177,22 +1426,27 @@ def dismiss_reminder() -> None:
         snooze(r)
 
 
-@st.dialog("⏰ End the shift", on_dismiss=dismiss_reminder)
 def close_reminder_dialog() -> None:
+    st.dialog(_("⏰ End the shift"), on_dismiss=dismiss_reminder)(_close_reminder_body)()
+
+
+def _close_reminder_body() -> None:
     r = st.session_state["_reminder"]
     due = f"{r['deadline']:%-I:%M %p}"
     if r["overdue"]:
-        st.error(f"**{slot_label(r['d'], r['s'])}** hasn't been ended. It was due at **{due}** — {r['mins']} min late.")
+        st.error(_("**{slot}** hasn't been ended. It was due at **{due}** — {m} min late.",
+                   slot=slot_label(r["d"], r["s"]), due=due, m=r["mins"]))
     else:
-        st.warning(f"**{slot_label(r['d'], r['s'])}** must be ended by **{due}** — {r['mins']} min left.")
-    st.markdown("Press **End shift & carry over** so the next shift gets its board with everything that didn't "
-                "finish and why.")
+        st.warning(_("**{slot}** must be ended by **{due}** — {m} min left.",
+                     slot=slot_label(r["d"], r["s"]), due=due, m=r["mins"]))
+    st.markdown(_("Press **End shift & carry over** so the next shift gets its board with everything that didn't "
+                  "finish and why."))
     c1, c2 = st.columns(2)
-    if c1.button("🔚 End shift now", type="primary", width="stretch"):
+    if c1.button(_("🔚 End shift now"), type="primary", width="stretch"):
         snooze(r, 10)
         st.session_state["_open_carryover"] = (r["d"], r["s"])
         st.rerun()
-    if c2.button("Remind me in 5 min", width="stretch"):
+    if c2.button(_("Remind me in 5 min"), width="stretch"):
         snooze(r)
         st.rerun()
 
@@ -1209,7 +1463,7 @@ def reminder_watch() -> None:
 
 
 def lead_page() -> None:
-    st.title("✏️ Update the floor")
+    st.title(_("✏️ Update the floor"))
     core = load_core()
     u = need_user(core)
     if not u:
@@ -1221,22 +1475,22 @@ def lead_page() -> None:
     closed = closed_text(board_row(core["boards"], d, shift))
     mine = u["lines"]
     if not mine:
-        st.warning("No lines could be read for you. In the **leads** tab, column **lines** should look like "
-                   "`1-9`, `7, 8, 9` or `ALL` (format the column as Plain text). Then sign out and back in.")
+        st.warning(_("No lines could be read for you. In the **leads** tab, column **lines** should look like "
+                     "`1-9`, `7, 8, 9` or `ALL` (format the column as Plain text). Then sign out and back in."))
         return
     with_items = [ln for ln in mine if not items.empty and (items["line"] == ln).any()]
     default = mine if len(mine) <= 6 else (with_items or mine)
     c1, c2, c3 = st.columns([4, 1, 1.6], vertical_alignment="bottom")
-    show = c1.multiselect("Lines", mine, default=default, format_func=LINE_LABEL.get, key=f"lead_lines_{u['name']}")
-    if c2.button("🔄 Refresh"):
+    show = c1.multiselect(_("Lines"), mine, default=default, format_func=line_name, key=f"lead_lines_{u['name']}_{lang()}")
+    if c2.button(_("🔄 Refresh")):
         refresh()
         st.rerun()
     ss = st.session_state
     ss["_reminder_open"] = False
     goto = ss.pop("_open_carryover", None)
     rem = close_reminder(core)
-    if c3.button("🔚 End shift & carry over", type="primary",
-                 help="At the end of the shift: everything not Finished moves to the next shift's board"):
+    if c3.button(_("🔚 End shift & carry over"), type="primary",
+                 help=_("At the end of the shift: everything not Finished moves to the next shift's board")):
         cancel_notready()
         if rem:
             snooze(rem, 10)
@@ -1254,33 +1508,33 @@ def lead_page() -> None:
     if closed:
         st.info(f"↪ {closed}")
     if items.empty:
-        st.info("Nothing is on the board for this shift yet. A planner sets it up on the **Plan** page — "
-                "or add recipes below.")
+        st.info(_("Nothing is on the board for this shift yet. A planner sets it up on the **Plan** page — "
+                  "or add recipes below."))
     for line in show:
         li = items[items["line"] == line] if not items.empty else items
         f = flags.get(line, {})
         with st.container(border=True):
             h1, h2 = st.columns([4, 1], vertical_alignment="center")
-            tags = (" · ★ priority" if f.get("priority") else "") + \
-                   (f" · ✕ down: {f['down_reason']}" if f.get("down") and f.get("down_reason") else "")
+            tags = (_(" · ★ priority") if f.get("priority") else "") + \
+                   (_(" · ✕ down: {r}", r=_(f["down_reason"])) if f.get("down") and f.get("down_reason") else "")
             done = int((li["status"] == "Finished").sum()) if len(li) else 0
-            h1.markdown(f"#### {LINE_LABEL[line]} <span style='font-size:.8rem;color:#5f6b7a'>"
-                        f"{done}/{len(li)} done{tags}</span>", unsafe_allow_html=True)
-            dk = f"down_{line}_{d}_{shift}_{f.get('down', False)}_{st.session_state.get('nonce_down_' + line, 0)}"
-            h2.toggle("Line down", value=f.get("down", False), key=dk,
+            h1.markdown(f"#### {line_name(line)} <span style='font-size:.8rem;color:#5f6b7a'>"
+                        f"{_('{a}/{b} done', a=done, b=len(li))}{tags}</span>", unsafe_allow_html=True)
+            dk = f"down_{line}_{d}_{shift}_{f.get('down', False)}_{st.session_state.get('nonce_down_' + line, 0)}_{lang()}"
+            h2.toggle(_("Line down"), value=f.get("down", False), key=dk,
                       on_change=on_toggle_down, args=(d, shift, line, dk, flags, u["name"]))
             for it in li.to_dict("records"):
                 item_row(it, u["name"], items)
             with st.form(f"add_{line}_{d}_{shift}", clear_on_submit=True, border=False):
                 a1, a2 = st.columns([5, 1], vertical_alignment="bottom")
-                txt = a1.text_input("Add recipe", placeholder="Add recipe — e.g. PO 379 or CS 131 x6",
+                txt = a1.text_input(_("Add recipe"), placeholder=_("Add recipe — e.g. PO 379 or CS 131 x6"),
                                     label_visibility="collapsed")
-                if a2.form_submit_button("➕ Add"):
+                if a2.form_submit_button(_("➕ Add")):
                     entries = parse_entries(txt)
                     if entries:
                         start = int(pd.to_numeric(li["seq"], errors="coerce").fillna(0).max()) + 1 if len(li) else 1
                         if safe(add_items, d, shift, line, entries, u["name"], start):
-                            flash(f"Added {len(entries)} to {LINE_LABEL[line]}")
+                            flash(_("Added {n} to {line}", n=len(entries), line=line_name(line)))
                         st.rerun()
     reminder_watch()
 
@@ -1313,53 +1567,81 @@ def find_previous_board(d: date, shift: str, look_back: int = 28):
     return None
 
 
+def clear_dialog(d: date, shift: str, tag: str, user: str) -> None:
+    st.dialog(_("Clear the board?"))(_clear_body)(d, shift, tag, user)
+
+
+def _clear_body(d: date, shift: str, tag: str, user: str) -> None:
+    core = load_core()
+    items = board_items(load_sched(mk(d)), d, shift)
+    flags, notes = line_flags(core["lineday"], d, shift), board_notes(core["boards"], d, shift)
+    if items.empty and not notes.strip() and not any(f.get("down") or f.get("priority") for f in flags.values()):
+        st.info(_("The board is already blank."))
+        return
+    st.warning(_("This removes **everything** from **{slot}**: {n} recipes, lines down / priority and the notes. "
+                 "The board starts blank.", slot=slot_label(d, shift), n=len(items)))
+    st.caption(_("The previous shift's record is kept, and every removed recipe is saved in the activity log."))
+    c1, c2 = st.columns(2)
+    if c1.button(_("🗑️ Yes, clear it"), type="primary", width="stretch"):
+        n = safe(clear_board, d, shift, user)
+        if n is not None:
+            for k in plan_keys(tag):
+                st.session_state.pop(k, None)
+            flash(_("{slot} cleared — {n} recipes removed", slot=slot_label(d, shift), n=n))
+        st.rerun()
+    if c2.button(_("Cancel"), width="stretch"):
+        st.rerun()
+
+
 def plan_page() -> None:
-    st.title("🗓️ Plan the board")
+    st.title(_("🗓️ Plan the board"))
     core = load_core()
     u = need_user(core, roles=PLANNER_ROLES)
     if not u:
         return
     d, shift = board_picker("plan")
-    tag = f"{d.isoformat()}_{shift}"
+    tag = f"{d.isoformat()}_{shift}_{lang()}"
     items = board_items(load_sched(mk(d)), d, shift)
     flags = line_flags(core["lineday"], d, shift)
     notes = board_notes(core["boards"], d, shift)
 
-    b2, b3, _ = st.columns([1.1, 0.9, 3.4])
-    if b2.button("⧉ Copy last board"):
+    b2, b3, b4, _sp = st.columns([1.2, 1.1, 1.1, 2.6])
+    if b2.button(_("⧉ Copy last board")):
         prev = find_previous_board(d, shift)
         if prev:
             pd_, ps, pit = prev
             fill_plan(tag, pit, line_flags(core["lineday"], pd_, ps), board_notes(core["boards"], pd_, ps),
                       overwrite=True, copy_down=False)
-            st.info(f"Copied {slot_label(pd_, ps)} — review and **Save board**.")
+            st.info(_("Copied {slot} — review and **Save board**.", slot=slot_label(pd_, ps)))
         else:
-            st.warning("No earlier board found in the last two weeks.")
-    if b3.button("↺ Discard edits"):
+            st.warning(_("No earlier board found in the last two weeks."))
+    if b3.button(_("↺ Discard edits")):
         for k in plan_keys(tag):
             st.session_state.pop(k, None)
+    if b4.button(_("🗑️ Clear board"), help=_("Remove every recipe, line down / priority and notes from this shift's board")):
+        clear_dialog(d, shift, tag, u["name"])
     fill_plan(tag, items, flags, notes, overwrite=False)
 
     with st.form(f"plan_form_{tag}"):
-        st.caption("One recipe per row (or comma-separated), in run order. Add `x6` for batches. "
-                   "To mark a line down, pick its reason in the box under it (leave it on *Running* otherwise). "
-                   "Recipes already on the board (including ones carried over from last shift) keep their "
-                   "status when you save.")
+        st.caption(_("One recipe per row (or comma-separated), in run order. Add `x6` for batches. "
+                     "To mark a line down, pick its reason in the box under it (leave it on *Running* otherwise). "
+                     "Recipes already on the board (including ones carried over from last shift) keep their "
+                     "status when you save."))
         for group in (GRID_LINES[:10], GRID_LINES[10:], SIDE_LINES):
             for i in range(0, len(group), 5):
                 cols = st.columns(5)
                 for c, line in zip(cols, group[i:i + 5]):
-                    c.text_area(LINE_LABEL[line], key=f"plan_{tag}_{line}", height=150)
-                    c.selectbox("Line down?", DOWN_REASONS, key=f"plan_{tag}_down_{line}", index=None,
-                                placeholder="Running", label_visibility="collapsed")
+                    c.text_area(line_name(line), key=f"plan_{tag}_{line}", height=150)
+                    c.selectbox(_("Line down?"), DOWN_REASONS, key=f"plan_{tag}_down_{line}", index=None,
+                                placeholder=_("Running"), label_visibility="collapsed", format_func=_)
                     li = items[items["line"] == line] if not items.empty else items
                     started = [f"{ICON[s]} {r}" for r, s in zip(li["recipe"], li["status"]) if s in ICON and s != "Ready"]
                     if started:
                         c.caption(" · ".join(started))
-        st.multiselect("Priority lines", LINE_IDS, key=f"plan_{tag}_priority", format_func=LINE_LABEL.get)
-        st.text_area("Board notes (everyone sees these)", key=f"plan_{tag}_notes", height=110,
-                     placeholder="High protein items, reminders…")
-        submitted = st.form_submit_button("💾 Save board", type="primary")
+        st.multiselect(_("Priority lines"), LINE_IDS, key=f"plan_{tag}_priority", format_func=line_name)
+        st.text_area(_("Board notes (everyone sees these)"), key=f"plan_{tag}_notes", height=110,
+                     placeholder=_("High protein items, reminders…"))
+        submitted = st.form_submit_button(_("💾 Save board"), type="primary")
 
     if submitted:
         ss = st.session_state
@@ -1376,22 +1658,22 @@ def plan_page() -> None:
             ok = True
         except Exception as e:
             ok = False
-            st.error(f"Couldn't save — {e}")
+            st.error(_("Couldn't save — {e}", e=e))
         if ok:
             refresh()
             for k in plan_keys(tag):
                 st.session_state.pop(k, None)
-            flash(f"Board saved — {added} added, {removed} removed")
+            flash(_("Board saved — {a} added, {r} removed", a=added, r=removed))
             st.rerun()
 
-    with st.expander("🎯 Daily goals (side panel)"):
+    with st.expander(_("🎯 Daily goals (side panel)")):
         g = core["goals"][GOAL_COLS] if not core["goals"].empty else pd.DataFrame(DEFAULT_GOALS, columns=GOAL_COLS)
         edited = st.data_editor(g, num_rows="dynamic", hide_index=True, key="goals_editor")
-        if st.button("Save goals"):
+        if st.button(_("Save goals")):
             rows = [[str(r["label"]).strip(), str(r["value"]).strip()] for r in edited.to_dict("records")
                     if str(r.get("label") or "").strip()]
             if safe(lambda: store().replace("goals", [GOAL_COLS] + rows) or True):
-                flash("Goals saved")
+                flash(_("Goals saved"))
             refresh()
             st.rerun()
 
@@ -1402,7 +1684,7 @@ def history_print_html(df: pd.DataFrame, start: date, end: date, sel: list, plan
 
     def bars(series: pd.Series, suffix: str = "", vmax: float | None = None) -> str:
         if series.empty:
-            return '<p class="muted">Nothing to show.</p>'
+            return f'<p class="muted">{_("Nothing to show.")}</p>'
         top = vmax or max(float(series.max()), 1)
         return "".join(
             f'<div class="row"><span class="lbl">{e(str(k))}</span><span class="track">'
@@ -1410,23 +1692,23 @@ def history_print_html(df: pd.DataFrame, start: date, end: date, sel: list, plan
             f'<span class="val">{float(v):.0f}{suffix}</span></div>' for k, v in series.items())
 
     nf = df[~df["finished"]]
-    reasons = nf["reason"].replace("", "No reason given").value_counts()
+    reasons = nf["reason"].replace("", "No reason given").map(_).value_counts()
     by_line = df.groupby("line").agg(planned=("id", "count"), finished=("finished", "sum"))
     by_line = (by_line["finished"] / by_line["planned"] * 100).reindex([i for i in LINE_IDS if i in by_line.index])
-    by_line.index = [LINE_LABEL[i] for i in by_line.index]
-    lines_txt = ", ".join(LINE_LABEL[i] for i in sel) if sel else "All lines"
-    rng = f"{start:%b} {start.day}, {start.year} – {end:%b} {end.day}, {end.year}"
+    by_line.index = [line_name(i) for i in by_line.index]
+    lines_txt = ", ".join(line_name(i) for i in sel) if sel else _("All lines")
+    rng = f"{fmt_date(start, False)}, {start.year} – {fmt_date(end, False)}, {end.year}"
     report = f"""
-<h1>Schedule Board — History</h1>
-<p class="sub">{e(rng)} · {e(lines_txt)} · printed {now():%b} {now().day}, {now():%-I:%M %p}</p>
+<h1>{e(_("Schedule Board — History"))}</h1>
+<p class="sub">{e(rng)} · {e(lines_txt)} · {_("printed")} {fmt_date(now().date(), False)}, {now():%-I:%M %p}</p>
 <div class="kpis">
-  <div><span>Recipes planned</span><b>{planned}</b></div>
-  <div><span>Finished</span><b>{fin} ({fin / planned:.0%})</b></div>
-  <div><span>Not finished</span><b>{planned - fin}</b></div>
-  <div><span>Carried to next shift</span><b>{carried}</b></div>
+  <div><span>{_("Recipes planned")}</span><b>{planned}</b></div>
+  <div><span>{_("Finished")}</span><b>{fin} ({fin / planned:.0%})</b></div>
+  <div><span>{_("Not finished")}</span><b>{planned - fin}</b></div>
+  <div><span>{_("Carried to next shift")}</span><b>{carried}</b></div>
 </div>
-<h2>Why recipes didn't finish (carry-over reasons)</h2>{bars(reasons) if not nf.empty else '<p class="muted">Everything planned was finished.</p>'}
-<h2>Finish rate by line</h2>{bars(by_line, "%", 100)}"""
+<h2>{e(_("Why recipes didn't finish (carry-over reasons)"))}</h2>{bars(reasons) if not nf.empty else f'<p class="muted">{_("Everything planned was finished.")}</p>'}
+<h2>{_("Finish rate by line")}</h2>{bars(by_line, "%", 100)}"""
     return f"""<!DOCTYPE html><html><head><style>
 body{{margin:0;font-family:"Source Sans Pro",system-ui,sans-serif;color:#1f2a37}}
 button{{font:inherit;font-size:14px;padding:6px 14px;border:1px solid #d6dbe2;border-radius:8px;background:#fff;cursor:pointer}}
@@ -1442,26 +1724,26 @@ h1{{font-size:22px;margin:0 0 2px}} h2{{font-size:15px;margin:22px 0 8px}} .sub,
 .val{{text-align:right;font-variant-numeric:tabular-nums}}
 @media print{{ #btn{{display:none}} #report{{display:block}} @page{{margin:14mm}} }}
 </style></head><body>
-<button id="btn" onclick="window.print()">🖨️ Print summary</button>
+<button id="btn" onclick="window.print()">{_("🖨️ Print summary")}</button>
 <div id="report">{report}</div>
 </body></html>"""
 
 
 def history_page() -> None:
-    st.title("📈 History")
+    st.title(_("📈 History"))
     today = now().date()
     c1, c2, c3 = st.columns([1, 1, 3])
-    start = c1.date_input("From", today - timedelta(days=6), format="MM/DD/YYYY")
-    end = c2.date_input("To", today, format="MM/DD/YYYY")
-    sel = c3.multiselect("Lines", LINE_IDS, format_func=LINE_LABEL.get, placeholder="All lines")
+    start = c1.date_input(_("From"), today - timedelta(days=6), format="MM/DD/YYYY")
+    end = c2.date_input(_("To"), today, format="MM/DD/YYYY")
+    sel = c3.multiselect(_("Lines"), LINE_IDS, format_func=line_name, placeholder=_("All lines"))
     if start > end:
-        st.warning("'From' is after 'To'.")
+        st.warning(_("'From' is after 'To'."))
         return
     months = month_range(start, end)
     df = pd.concat([load_sched(m) for m in months], ignore_index=True)
     lg = pd.concat([load_log(m) for m in months], ignore_index=True)
     if df.empty:
-        st.info("No boards in this range yet.")
+        st.info(_("No boards in this range yet."))
         return
     lo, hi = start.isoformat(), end.isoformat()
     df = df[(df["date"] >= lo) & (df["date"] <= hi) & (~df["deleted"].map(truthy))].copy()
@@ -1471,61 +1753,70 @@ def history_page() -> None:
         df = df[df["line"].isin(sel)]
         lg = lg[lg["line"].isin(sel)] if not lg.empty else lg
     if df.empty:
-        st.info("Nothing planned for these lines in this range.")
+        st.info(_("Nothing planned for these lines in this range."))
         return
-    df["Line"] = df["line"].map(LINE_LABEL).fillna(df["line"])
+    df["Line"] = df["line"].map(line_name)
     df["finished"] = df["status"].eq("Finished")
-    df["carried"] = df["carried"].map(lambda x: "Yes" if truthy(x) else "")
+    df["carried"] = df["carried"].map(lambda x: _("Yes") if truthy(x) else "")
     df["run_min"] = ((pd.to_datetime(df["finished_at"], errors="coerce") -
                       pd.to_datetime(df["started_at"], errors="coerce")).dt.total_seconds() / 60).round(0)
 
     planned, fin = len(df), int(df["finished"].sum())
-    carried = int((df["carried"] == "Yes").sum())
+    carried = int((df["carried"] != "").sum())
     components.html(history_print_html(df, start, end, sel, planned, fin, carried), height=48)
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Recipes planned", planned)
-    m2.metric("Finished", f"{fin}  ({fin / planned:.0%})")
-    m3.metric("Not finished", planned - fin)
-    m4.metric("Carried to next shift", carried)
+    m1.metric(_("Recipes planned"), planned)
+    m2.metric(_("Finished"), f"{fin}  ({fin / planned:.0%})")
+    m3.metric(_("Not finished"), planned - fin)
+    m4.metric(_("Carried to next shift"), carried)
 
     a, b = st.columns(2)
     with a:
-        st.markdown("**Why recipes didn't finish (carry-over reasons)**")
+        why_title = _("Why recipes didn't finish (carry-over reasons)")
+        st.markdown(f"**{why_title}**")
         nf = df[~df["finished"]]
         if nf.empty:
-            st.caption("Everything planned was finished. 🎉")
+            st.caption(_("Everything planned was finished. 🎉"))
         else:
-            st.bar_chart(nf["reason"].replace("", "No reason given").value_counts().rename("Recipes"), horizontal=True,
-                         sort="-Recipes")
+            rec = _("Recipes")
+            st.bar_chart(nf["reason"].replace("", "No reason given").map(_).value_counts().rename(rec), horizontal=True,
+                         sort=f"-{rec}")
     with b:
-        st.markdown("**Finish rate by line**")
+        st.markdown(f"**{_('Finish rate by line')}**")
+        pct = _("Finish %")
         by_line = df.groupby("Line", sort=False).agg(planned=("id", "count"), finished=("finished", "sum"))
-        by_line["Finish %"] = (by_line["finished"] / by_line["planned"] * 100).round(0)
-        by_line = by_line.reindex([LINE_LABEL[i] for i in LINE_IDS if LINE_LABEL[i] in by_line.index])
-        st.bar_chart(by_line["Finish %"], sort=False)
+        by_line[pct] = (by_line["finished"] / by_line["planned"] * 100).round(0)
+        by_line = by_line.reindex([line_name(i) for i in LINE_IDS if line_name(i) in by_line.index])
+        st.bar_chart(by_line[pct], sort=False)
 
-    st.markdown("**By shift**")
+    st.markdown(f"**{_('By shift')}**")
     g = df.groupby(["date", "shift"]).agg(Planned=("id", "count"), Finished=("finished", "sum")).reset_index()
     g["Not finished"] = g["Planned"] - g["Finished"]
     g["Finish %"] = (g["Finished"] / g["Planned"] * 100).round(0)
-    st.dataframe(g.sort_values(["date", "shift"], ascending=False).rename(columns={"date": "Date", "shift": "Shift"}),
-                 hide_index=True)
+    g["shift"] = g["shift"].map(shift_name)
+    g = g.sort_values(["date", "shift"], ascending=False)
+    g.columns = [_(c) for c in ("Date", "Shift", "Planned", "Finished", "Not finished", "Finish %")]
+    st.dataframe(g, hide_index=True)
 
-    st.markdown("**Recipes**")
+    st.markdown(f"**{_('Recipes')}**")
     cols = {"date": "Date", "shift": "Shift", "Line": "Line", "seq": "#", "recipe": "Recipe", "qty": "Qty",
             "status": "Status", "reason": "Reason", "comment": "Comment", "carried": "Carried over", "started_at": "Started",
             "finished_at": "Finished", "run_min": "Run (min)", "updated_by": "Last update by"}
-    out = df.sort_values(["date", "shift", "line", "seq"])[list(cols)].rename(columns=cols)
+    out = df.sort_values(["date", "shift", "line", "seq"])[list(cols)].copy()
+    out["shift"] = out["shift"].map(shift_name)
+    out["status"] = out["status"].map(lambda v: _(v) if v else v)
+    out["reason"] = out["reason"].map(lambda v: _(v) if v else v)
+    out = out.rename(columns={k: _(v) for k, v in cols.items()})
     st.dataframe(out, hide_index=True)
-    st.download_button("⬇ Download recipes (CSV)", out.to_csv(index=False).encode(), f"schedule_{lo}_{hi}.csv", "text/csv")
+    st.download_button(_("⬇ Download recipes (CSV)"), out.to_csv(index=False).encode(), f"schedule_{lo}_{hi}.csv", "text/csv")
 
-    with st.expander("Activity log (every status change)"):
+    with st.expander(_("Activity log (every status change)")):
         if lg.empty:
-            st.caption("No activity yet.")
+            st.caption(_("No activity yet."))
         else:
-            lg = lg.assign(line=lg["line"].map(LINE_LABEL).fillna(lg["line"])).sort_values("ts", ascending=False)
+            lg = lg.assign(line=lg["line"].map(line_name)).sort_values("ts", ascending=False)
             st.dataframe(lg[LOG_COLS], hide_index=True)
-            st.download_button("⬇ Download log (CSV)", lg[LOG_COLS].to_csv(index=False).encode(),
+            st.download_button(_("⬇ Download log (CSV)"), lg[LOG_COLS].to_csv(index=False).encode(),
                                f"activity_{lo}_{hi}.csv", "text/csv")
 
 
@@ -1536,12 +1827,14 @@ def sidebar() -> None:
             st.warning("**Demo mode** — not connected to Google Sheets, data resets when the app restarts.\n\n"
                        f"{store().why}\n\n"
                        "Try it: **Demo Lead** PIN `1111`, **Demo Planner** PIN `2222`.")
+        st.segmented_control(f"🌐 {_('Language')}", ["en", "es"], default=lang(), key="_lang_pick",
+                             format_func={"en": "English", "es": "Español"}.get, on_change=on_lang_change)
         u = st.session_state.get("user")
         if u:
             left = max(0, int((u["exp"] - time.time()) // 3600))
-            st.markdown(f"👤 **{u['name']}** · {u['role']}")
-            st.caption(f"Signed in for about {left} more hour{'s' if left != 1 else ''}")
-            if st.button("Sign out"):
+            st.markdown(f"👤 **{u['name']}** · {_(u['role'])}")
+            st.caption(_("Signed in for about {n} more hours" if left != 1 else "Signed in for about {n} more hour", n=left))
+            if st.button(_("Sign out")):
                 st.session_state.pop("user", None)
                 st.query_params.pop("s", None)
                 st.rerun()
@@ -1554,14 +1847,16 @@ def main() -> None:
     except Exception as e:
         st.error(f"Can't reach the Google Sheet: {e}")
         st.stop()
-    pages = [st.Page(board_page, title="Board", icon="📋", default=True),
-             st.Page(lead_page, title="Update", icon="✏️"),
-             st.Page(plan_page, title="Plan", icon="🗓️"),
-             st.Page(history_page, title="History", icon="📈")]
+    init_lang()
+    pages = [st.Page(board_page, title=_("Board"), icon="📋", default=True),
+             st.Page(lead_page, title=_("Update"), icon="✏️"),
+             st.Page(plan_page, title=_("Plan"), icon="🗓️"),
+             st.Page(history_page, title=_("History"), icon="📈")]
     pg = st.navigation(pages, position="hidden" if tv else "sidebar")
     if not tv:
         keep_signed_in()
         sidebar()
+        save_lang_cookie()
     show_flash()
     pg.run()
 
