@@ -26,7 +26,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Schedule Board", page_icon="📋", layout="wide")
+st.set_page_config(page_title="Schedule Board", page_icon="📋", layout="wide", initial_sidebar_state="collapsed")
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 TZ = ZoneInfo("America/Chicago")
@@ -971,11 +971,19 @@ BOARD_CSS = """<style>
 .live{margin-left:auto;font-size:12px;color:#5f6b7a;white-space:nowrap}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#188038;margin-right:5px;animation:sbp 2s infinite}
 @keyframes sbp{50%{opacity:.25}}
-.sb-main{display:grid;grid-template-columns:minmax(0,1fr) 210px;gap:10px;align-items:start}
-.sb-grid{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:8px}
-.sb-side{display:flex;flex-direction:column;gap:8px}
-.card{background:#fff;border:1px solid #d6dbe2;border-radius:8px;padding:6px 6px 8px;min-height:170px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+.sb{container-type:inline-size}
+.sb-main{display:grid;grid-template-columns:1fr;gap:10px;align-items:start}
+.sb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:8px}
+.sb-side{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:8px;align-items:start}
+.card{background:#fff;border:1px solid #d6dbe2;border-radius:8px;padding:6px 6px 8px;min-height:90px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
 .sb-side .card{min-height:0}
+@container (min-width:1000px){
+ .sb-main{grid-template-columns:minmax(0,1fr) 230px}
+ .sb-grid{grid-template-columns:repeat(5,minmax(0,1fr))}
+ .sb-side{display:flex;flex-direction:column;align-items:stretch}}
+@container (min-width:1750px){
+ .sb-grid{grid-template-columns:repeat(10,minmax(0,1fr))}
+ .card{min-height:170px}}
 .card.prio{border:2px solid #c62828}
 .card.down{background:repeating-linear-gradient(135deg,#f6f7f9 0 10px,#eceff3 10px 20px)}
 .ch{display:flex;justify-content:space-between;align-items:center;gap:4px;margin-bottom:4px}
@@ -986,7 +994,8 @@ BOARD_CSS = """<style>
 .badge.prio{background:#c62828}
 .downx{font-size:20px;font-weight:900;color:#9aa3ae;text-align:center;padding:16px 0 2px}
 .downr{font-size:12px;font-weight:800;color:#a50e0e;text-align:center;padding-bottom:6px}
-.item{display:flex;justify-content:space-between;align-items:center;gap:4px;border:1.5px solid;border-radius:6px;padding:3px 6px;margin-top:4px;font-weight:700;font-size:14px;line-height:1.25}
+.item{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:0 6px;border:1.5px solid;border-radius:6px;padding:3px 6px;margin-top:4px;font-weight:700;font-size:14px;line-height:1.25}
+.item .rec{white-space:nowrap}
 .item .tag{font-size:8.5px;font-weight:800;letter-spacing:.05em;white-space:nowrap}
 .item.s-running{box-shadow:0 0 0 2px rgba(24,128,56,.28)}
 .item.s-finished .rec{text-decoration:line-through}
@@ -1006,10 +1015,7 @@ BOARD_CSS = """<style>
 .legend{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .legend span{font-size:11px;font-weight:700;border:1.5px solid;border-radius:5px;padding:1px 6px}
 .sb.tv .item{font-size:17px}.sb.tv .lbl{font-size:14px}.sb.tv .sb-title{font-size:28px}.sb.tv .cmt{font-size:12.5px}
-@media (max-width:1200px){
- .sb-main{grid-template-columns:1fr}
- .sb-grid,.sb-side{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
- .sb-foot{grid-template-columns:1fr}.card{min-height:0}.live{margin-left:0}}
+@container (max-width:760px){.sb-foot{grid-template-columns:1fr}.live{margin-left:0}}
 </style>"""
 
 TV_CSS = """<style>
@@ -1322,7 +1328,7 @@ def _down_body() -> None:
 
 
 def item_row(it: dict, user: str, items: pd.DataFrame) -> None:
-    c1, c2, c3, c4 = st.columns([1.6, 6.4, 1.7, 1.2], vertical_alignment="center")
+    c1, c3, c4 = st.columns([4, 1.5, 1.1], vertical_alignment="center")
     c1.markdown(f"**{it['recipe']}**" + (f" ×{it['qty']}" if it["qty"] else "") + (" ↪" if truthy(it["carried"]) else ""))
     sub = " · ".join(x for x in (_(it["reason"]) if it["reason"] else "", it["comment"]) if x)
     if sub:
@@ -1332,7 +1338,7 @@ def item_row(it: dict, user: str, items: pd.DataFrame) -> None:
     if key in st.session_state and st.session_state[key] != it["status"] and not (pending and pending["key"] == key):
         reset_status_widget(it["id"])  # an unsaved pick (e.g. cancelled Not ready) snaps back
         key = status_key(it)
-    c2.segmented_control(_("Status"), STATUSES, default=it["status"] if it["status"] in STATUSES else None,
+    st.segmented_control(_("Status"), STATUSES, default=it["status"] if it["status"] in STATUSES else None,
                          format_func=lambda s: f"{ICON[s]} {_(s)}", key=key, label_visibility="collapsed",
                          on_change=on_status, args=(it, key, user))
     with c3.popover(_("💬 Comments"), help=_("Reason and comment — carried to the next shift")):
@@ -1481,16 +1487,16 @@ def lead_page() -> None:
         return
     with_items = [ln for ln in mine if not items.empty and (items["line"] == ln).any()]
     default = mine if len(mine) <= 6 else (with_items or mine)
-    c1, c2, c3 = st.columns([4, 1, 1.6], vertical_alignment="bottom")
-    show = c1.multiselect(_("Lines"), mine, default=default, format_func=line_name, key=f"lead_lines_{u['name']}_{lang()}")
-    if c2.button(_("🔄 Refresh")):
+    c2, c3, _sp2 = st.columns([1, 1.6, 2], vertical_alignment="bottom")
+    show = st.multiselect(_("Lines"), mine, default=default, format_func=line_name, key=f"lead_lines_{u['name']}_{lang()}")
+    if c2.button(_("🔄 Refresh"), width="stretch"):
         refresh()
         st.rerun()
     ss = st.session_state
     ss["_reminder_open"] = False
     goto = ss.pop("_open_carryover", None)
     rem = close_reminder(core)
-    if c3.button(_("🔚 End shift & carry over"), type="primary",
+    if c3.button(_("🔚 End shift & carry over"), type="primary", width="stretch",
                  help=_("At the end of the shift: everything not Finished moves to the next shift's board")):
         cancel_notready()
         if rem:
@@ -1515,7 +1521,7 @@ def lead_page() -> None:
         li = items[items["line"] == line] if not items.empty else items
         f = flags.get(line, {})
         with st.container(border=True):
-            h1, h2 = st.columns([4, 1], vertical_alignment="center")
+            h1, h2 = st.columns([3, 1.3], vertical_alignment="center")
             tags = (_(" · ★ priority") if f.get("priority") else "") + \
                    (_(" · ✕ down: {r}", r=_(f["down_reason"])) if f.get("down") and f.get("down_reason") else "")
             done = int((li["status"] == "Finished").sum()) if len(li) else 0
@@ -1855,8 +1861,9 @@ def main() -> None:
              st.Page(lead_page, title=_("Update"), icon="✏️"),
              st.Page(plan_page, title=_("Plan"), icon="🗓️"),
              st.Page(history_page, title=_("History"), icon="📈")]
-    pg = st.navigation(pages, position="hidden" if tv else "sidebar")
+    pg = st.navigation(pages, position="hidden" if tv else "top")
     if not tv:
+        st.html("<style>.block-container,[data-testid='stMainBlockContainer']{padding-top:3.75rem!important}</style>")
         keep_signed_in()
         sidebar()
         save_lang_cookie()
