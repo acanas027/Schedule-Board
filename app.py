@@ -63,7 +63,7 @@ SESSION_HOURS = 12                      # how long a sign-in lasts (survives ref
 REFRESH_SECONDS = 15                    # board auto-refresh
 CACHE_SECONDS = 10                      # shared read cache (protects Sheets quota)
 FLAG_KEYS = ("down", "priority")
-DOWN_REASONS = ["No Material", "No Staff", "Mechanical Issues", "Not Scheduled"]
+DOWN_REASONS = ["No Packing Material", "No Staff", "Mechanical Issues", "Not Scheduled" , "No Food"]
 
 # Sheet tabs (schedule_YYYY_MM and log_YYYY_MM are created per month)
 SCHED_COLS = ["id", "date", "shift", "line", "seq", "recipe", "qty", "status", "reason", "comment",
