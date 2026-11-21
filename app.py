@@ -58,7 +58,7 @@ NOT_READY_LINES = ["No food", "No packing material", "Mixing working on it", "Mi
 NOT_READY_COOK = ["No carts", "Low temperatures", "High temperatures", "No totes", "No wet mix", "No dry spice",
                   "No staff", "No food"]
 END_REASONS = ["No food", "Ran out of time", "Mechanical issues", "No staff", "No packing material"]  # end of shift
-END_REASONS_COOK = END_REASONS + ["No carts", "No totes", "No wet mix", "No dry spice"]
+END_REASONS_COOK = END_REASONS + ["No carts", "No totes", "No wet mix", "No dry spice",  "Ran out of time", "Mechanical issues", "No staff"]
 REASONS = list(dict.fromkeys(NOT_READY_LINES + NOT_READY_COOK + END_REASONS_COOK))  # every reason, for reference
 
 SHIFTS = ["1st", "2nd"]                 # in start-time order
