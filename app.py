@@ -35,7 +35,8 @@ TZ = ZoneInfo("America/Chicago")
 LINES = (
     [(f"L{i}", f"Line {i}", "top") for i in range(1, 11)]
     + [(f"L{i}", f"Line {i}", "bottom") for i in range(11, 20)]
-    + [("CS", "Cole Slaw", "bottom"), ("C1", "Cook 1", "side"), ("C2", "Cook 2", "side"), ("VX", "Vortex", "side")]
+    + [("CS", "Cole Slaw", "bottom"), ("C1", "Cook 1", "side"), ("C2", "Cook 2", "side"), ("VX", "Vortex", "side"),
+       ("MB", "Mac Bulk Line", "side")]
 )
 LINE_IDS = [i for i, _, _ in LINES]
 LINE_LABEL = {i: lbl for i, lbl, _ in LINES}
@@ -53,7 +54,7 @@ STATUS_STYLE = {  # background, border, text, tag
     "Finished": ("#eceff3", "#c3c9d2", "#7a8594", "DONE"),
 }
 # Reasons. Cook areas (Cook 1, Cook 2, Cole Slaw, Vortex) have their own "not ready" list.
-COOK_AREAS = ("C1", "C2", "CS", "VX")
+COOK_AREAS = ("C1", "C2", "CS", "VX", "MB")  # use the cook-area reason lists
 NOT_READY_LINES = ["No food", "No packing material", "Mixing working on it", "Mixing waiting for product"]
 NOT_READY_COOK = ["No carts", "Low temperatures", "High temperatures", "No totes", "No wet mix", "No dry spice",
                   "No staff", "No food"]
@@ -255,7 +256,10 @@ ES = {
     "No wet mix": "Sin mezcla húmeda", "No dry spice": "Sin especias secas", "No staff": "Sin personal",
     "Not scheduled": "No programada", "Finished schedule": "Terminó lo programado",
     # floor feed
-    "✕ Line down": "✕ Línea parada", "↪ carried over": "↪ pasada al siguiente turno",
+    "✕ Line down": "✕ Línea parada", "✓ Resolved": "✓ Resuelto", "✓ resolved": "✓ resuelto",
+    "{r}: resolved": "{r}: resuelto",
+    "Clear the reason and comment from the board — it stays in Latest from the floor":
+        "Quitar la razón y el comentario del tablero — queda en Últimas del piso", "↪ carried over": "↪ pasada al siguiente turno",
     "No comments yet this shift": "Todavía no hay comentarios en este turno",
     "{n} this shift": "{n} en este turno",
     # default goals
@@ -361,7 +365,7 @@ ES = {
     "Board notes (everyone sees these)": "Notas del tablero (todos las ven)",
     "High protein items, reminders…": "Productos altos en proteína, recordatorios…", "💾 Save board": "💾 Guardar tablero",
     "Board saved — {a} added, {r} removed": "Tablero guardado — {a} agregadas, {r} quitadas",
-    "🎯 Daily goals (side panel)": "🎯 Metas diarias (panel lateral)", "label": "meta", "value": "valor",
+    "🎯 Daily goals (bottom of the board)": "🎯 Metas diarias (abajo en el tablero)", "label": "meta", "value": "valor",
     "Save goals": "Guardar metas", "Goals saved": "Metas guardadas",
     # history
     "📈 History": "📈 Historial", "From": "Desde", "To": "Hasta", "All lines": "Todas las líneas",
@@ -811,8 +815,9 @@ def update_item(item: dict, changes: dict, user: str, action: str) -> bool:
     if new_status == "Finished":
         ch["finished_at"] = t
     s.update_cells(tab, [(r, SCHED_COLS.index(k) + 1, v) for k, v in ch.items()])
+    keep_old = action == "resolved"  # log what was resolved, not the now-empty fields
     write_logs([item_log(item, action, user, to_status=new_status or item["status"],
-                         reason=ch.get("reason"), comment=ch.get("comment"))])
+                         reason=None if keep_old else ch.get("reason"), comment=None if keep_old else ch.get("comment"))])
     refresh()
     return True
 
@@ -1077,7 +1082,7 @@ BOARD_CSS = """<style>
 .empty{color:#b3bac4;text-align:center;padding-top:22px}
 .goal{display:flex;justify-content:space-between;gap:6px;font-size:13px;padding:3px 0;border-bottom:1px solid #f0f2f5}
 .goal b{color:#1a56db;white-space:nowrap}
-.sb-foot{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;margin-top:10px}
+.sb-foot{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(200px,.55fr) minmax(0,1.4fr);gap:10px;margin-top:10px;align-items:start}
 .panel{background:#fff;border:1px solid #d6dbe2;border-radius:8px;padding:8px 10px}
 .ph{margin:0 0 6px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:#5f6b7a}
 .notes{white-space:pre-wrap;font-size:14px;line-height:1.4}
@@ -1085,6 +1090,7 @@ BOARD_CSS = """<style>
 .feed time{color:#5f6b7a;font-variant-numeric:tabular-nums;margin-right:6px}
 .feed .who{color:#8a94a3}
 .feed .why{color:#a50e0e}
+.feed .ok{color:#188038}
 .feed-list{max-height:290px;overflow-y:auto;overscroll-behavior:contain;padding-right:4px}
 .sb.tv .feed-list{overflow:hidden}
 .legend{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
@@ -1140,7 +1146,7 @@ def floor_feed(log: pd.DataFrame, d: date, shift: str) -> list[dict]:
     lg = log[(log["date"] == d.isoformat()) & (log["shift"] == shift)]
     has_text = (lg["reason"].str.strip() != "") | (lg["comment"].str.strip() != "")
     keep = (((lg["action"] == "note") & has_text) | ((lg["action"] == "status") & (lg["to_status"] == "Not ready"))
-            | lg["action"].isin(["carried over", "line down"]))
+            | lg["action"].isin(["carried over", "line down", "resolved"]))
     return lg[keep].sort_values("ts", ascending=False).to_dict("records")
 
 
@@ -1171,12 +1177,15 @@ def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: s
 
     goal_rows = "".join(f'<div class="goal"><span>{e(_(str(g["label"])))}</span><b>{e(str(g["value"]))}</b></div>'
                         for g in goals.to_dict("records")) if not goals.empty else '<div class="empty">—</div>'
-    side = "".join(_card(ln, items, flags) for ln in SIDE_LINES) + \
-        f'<div class="panel"><div class="ph">{_("Daily goals")}</div>{goal_rows}</div>'
+    side = "".join(_card(ln, items, flags) for ln in SIDE_LINES)
 
     def feed_row(r: dict) -> str:
         if r["action"] == "line down":
             what = f'{_("✕ Line down")}: <b class="why">{e(_(r["reason"]))}</b>'
+        elif r["action"] == "resolved":
+            what = e(r["recipe"]) + f' <b class="ok">{_("✓ resolved")}</b>' \
+                + (f' <span class="who">{e(_(r["reason"]))}' + (f' — {e(r["comment"])}' if r["comment"] else "") + '</span>'
+                   if r["reason"] or r["comment"] else "")
         else:
             what = e(r["recipe"]) + (f' <b class="why">{e(_(r["reason"]))}</b>' if r["reason"] else "") \
                 + (f' — {e(r["comment"])}' if r["comment"] else "") \
@@ -1200,6 +1209,7 @@ def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: s
             f'<div class="sb-side">{side}</div></div>'
             f'<div class="sb-foot"><div class="panel"><div class="ph">{_("Notes")}</div><div class="notes">{e(notes) or "—"}</div>'
             f'<div class="legend">{legend}</div></div>'
+            f'<div class="panel"><div class="ph">{_("Daily goals")}</div>{goal_rows}</div>'
             f'<div class="panel feed"><div class="ph">{_("Latest from the floor")}{feed_count}</div>'
             f'<div class="feed-list">{feed}</div></div></div></div>')
 
@@ -1439,6 +1449,14 @@ def item_row(it: dict, user: str, items: pd.DataFrame) -> None:
     sub = " · ".join(x for x in (_(it["reason"]) if it["reason"] else "", it["comment"]) if x)
     if sub:
         c1.caption(sub)
+        if c1.button(_("✓ Resolved"), key=f"res_{it['id']}_{it['updated_at']}", type="tertiary",
+                     help=_("Clear the reason and comment from the board — it stays in Latest from the floor")):
+            ch = {"reason": "", "comment": ""}
+            if it["status"] == "Not ready":
+                ch["status"] = "Ready"  # resolved means it can run now
+            if safe(update_item, it, ch, user, "resolved"):
+                flash(_("{r}: resolved", r=it["recipe"]))
+            st.rerun()
     key = status_key(it)
     pending = st.session_state.get("_notready")
     if key in st.session_state and st.session_state[key] != it["status"] and not (pending and pending["key"] == key):
@@ -1786,7 +1804,7 @@ def plan_page() -> None:
             flash(_("Board saved — {a} added, {r} removed", a=added, r=removed))
             st.rerun()
 
-    with st.expander(_("🎯 Daily goals (side panel)")):
+    with st.expander(_("🎯 Daily goals (bottom of the board)")):
         g = core["goals"][GOAL_COLS] if not core["goals"].empty else pd.DataFrame(DEFAULT_GOALS, columns=GOAL_COLS)
         edited = st.data_editor(g, num_rows="dynamic", hide_index=True, key="goals_editor")
         if st.button(_("Save goals")):
