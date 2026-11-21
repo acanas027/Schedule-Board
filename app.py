@@ -58,7 +58,7 @@ NOT_READY_LINES = ["No food", "No packing material", "Mixing working on it", "Mi
 NOT_READY_COOK = ["No carts", "Low temperatures", "High temperatures", "No totes", "No wet mix", "No dry spice",
                   "No staff", "No food"]
 END_REASONS = ["No food", "Ran out of time", "Mechanical issues", "No staff", "No packing material"]  # end of shift
-END_REASONS_COOK = END_REASONS + ["No carts", "No totes", "No wet mix", "No dry spice",  "Ran out of time", "Mechanical issues", "No staff"]
+END_REASONS_COOK = END_REASONS + ["No carts", "No totes", "No wet mix", "No dry spice"]
 REASONS = list(dict.fromkeys(NOT_READY_LINES + NOT_READY_COOK + END_REASONS_COOK))  # every reason, for reference
 
 SHIFTS = ["1st", "2nd"]                 # in start-time order
@@ -71,6 +71,7 @@ REFRESH_SECONDS = 15                    # board auto-refresh
 CACHE_SECONDS = 10                      # shared read cache (protects Sheets quota)
 FLAG_KEYS = ("down", "priority")
 DOWN_REASONS = ["Not scheduled", "Finished schedule", "Mechanical issues", "No food", "No packing material", "No staff"]
+DOWN_REASONS_COOK = NOT_READY_COOK + ["Mechanical issues"]  # Cook 1, Cook 2, Cole Slaw, Vortex
 
 # Sheet tabs (schedule_YYYY_MM and log_YYYY_MM are created per month)
 SCHED_COLS = ["id", "date", "shift", "line", "seq", "recipe", "qty", "status", "reason", "comment",
@@ -213,6 +214,10 @@ def is_tv() -> bool:
 
 def not_ready_reasons(line: str) -> list[str]:
     return NOT_READY_COOK if line in COOK_AREAS else NOT_READY_LINES
+
+
+def down_reasons(line: str) -> list[str]:
+    return DOWN_REASONS_COOK if line in COOK_AREAS else DOWN_REASONS
 
 
 def end_reasons(line: str) -> list[str]:
@@ -1409,7 +1414,7 @@ def _down_body() -> None:
     if not p:
         return
     st.markdown(f"**{line_name(p['line'])}** · {slot_label(p['d'], p['shift'])}")
-    reason = st.radio(_("Reason (required)"), DOWN_REASONS, index=None, format_func=_)
+    reason = st.radio(_("Reason (required)"), down_reasons(p["line"]), index=None, format_func=_)
     c1, c2 = st.columns(2)
     if c1.button(_("Save"), type="primary", width="stretch"):
         if not reason:
@@ -1662,7 +1667,7 @@ def fill_plan(tag: str, items: pd.DataFrame, flags: dict, notes: str, overwrite:
     values[f"plan_{tag}_priority"] = [ln for ln in LINE_IDS if flags.get(ln, {}).get("priority")]
     for ln in LINE_IDS:
         f = flags.get(ln, {})
-        values[f"plan_{tag}_down_{ln}"] = (canon(f.get("down_reason"), DOWN_REASONS) or DOWN_REASONS[0]) \
+        values[f"plan_{tag}_down_{ln}"] = (canon(f.get("down_reason"), down_reasons(ln)) or down_reasons(ln)[0]) \
             if copy_down and f.get("down") else None
     values[f"plan_{tag}_notes"] = notes
     for k, v in values.items():
@@ -1746,7 +1751,7 @@ def plan_page() -> None:
                 cols = st.columns(5)
                 for c, line in zip(cols, group[i:i + 5]):
                     c.text_area(line_name(line), key=f"plan_{tag}_{line}", height=150)
-                    c.selectbox(_("Line down?"), with_current(DOWN_REASONS, st.session_state.get(f"plan_{tag}_down_{line}")),
+                    c.selectbox(_("Line down?"), with_current(down_reasons(line), st.session_state.get(f"plan_{tag}_down_{line}")),
                                 key=f"plan_{tag}_down_{line}", index=None,
                                 placeholder=_("Running"), label_visibility="collapsed", format_func=_)
                     li = items[items["line"] == line] if not items.empty else items
