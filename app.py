@@ -52,7 +52,14 @@ STATUS_STYLE = {  # background, border, text, tag
     "Running": ("#dcf5e3", "#188038", "#0d5223", "RUNNING"),
     "Finished": ("#eceff3", "#c3c9d2", "#7a8594", "DONE"),
 }
-REASONS = ["Ran out of time", "Temoerature problems" , "No carts", "No totes" , "No Dry Spice" , "No wet mix", "Mechanical issues", "Rework other product", "No packing material", "Short staffed", "Working on it" , "No Food"]
+# Reasons. Cook areas (Cook 1, Cook 2, Cole Slaw, Vortex) have their own "not ready" list.
+COOK_AREAS = ("C1", "C2", "CS", "VX")
+NOT_READY_LINES = ["No food", "No packing material", "Mixing working on it", "Mixing waiting for product"]
+NOT_READY_COOK = ["No carts", "Low temperatures", "High temperatures", "No totes", "No wet mix", "No dry spice",
+                  "No staff", "No food"]
+END_REASONS = ["No food", "Ran out of time", "Mechanical issues", "No staff", "No packing material"]  # end of shift
+END_REASONS_COOK = END_REASONS + ["No carts", "No totes", "No wet mix", "No dry spice"]
+REASONS = list(dict.fromkeys(NOT_READY_LINES + NOT_READY_COOK + END_REASONS_COOK))  # every reason, for reference
 
 SHIFTS = ["1st", "2nd"]                 # in start-time order
 SHIFT_START = {"1st": 6, "2nd": 16}     # hour (24h) each shift starts
@@ -63,12 +70,12 @@ SESSION_HOURS = 12                      # how long a sign-in lasts (survives ref
 REFRESH_SECONDS = 15                    # board auto-refresh
 CACHE_SECONDS = 10                      # shared read cache (protects Sheets quota)
 FLAG_KEYS = ("down", "priority")
-DOWN_REASONS = ["No Packing Material", "No Staff", "Mechanical Issues", "Not Scheduled" , "No Food"]
+DOWN_REASONS = ["Not scheduled", "Finished schedule", "Mechanical issues", "No food", "No packing material", "No staff"]
 
 # Sheet tabs (schedule_YYYY_MM and log_YYYY_MM are created per month)
 SCHED_COLS = ["id", "date", "shift", "line", "seq", "recipe", "qty", "status", "reason", "comment",
               "deleted", "created_by", "created_at", "updated_by", "updated_at", "started_at", "finished_at",
-              "carried", "carried_from"]
+              "carried", "carried_from", "short"]
 LOG_COLS = ["ts", "date", "shift", "line", "item_id", "recipe", "action", "from_status", "to_status",
             "reason", "comment", "user"]
 LINEDAY_COLS = ["key", "date", "shift", "line", "down", "priority", "updated_by", "updated_at", "down_reason"]
@@ -137,24 +144,28 @@ def slot_label(d: date, shift: str) -> str:
     return f"{fmt_date(d)} · {shift} shift"
 
 
-def parse_entries(text: str) -> list[tuple[str, str]]:
-    """'PO 379\\nCS 131 x6, dice' -> [('PO 379',''), ('CS 131','6'), ('DICE','')]"""
+def parse_entries(text: str) -> list[tuple[str, str, bool]]:
+    """'PO 379 *\\nCS 131 x6, dice' -> [('PO 379','',True), ('CS 131','6',False), ('DICE','',False)]
+    A * before or after a recipe puts it on the short sheet."""
     out = []
     for raw in re.split(r"[\n,;]+", text or ""):
         s = " ".join(raw.strip().split())
+        short = s.startswith("*") or s.endswith("*")
+        s = s.strip("* ").strip()
         if not s:
             continue
         qty = ""
-        m = re.match(r"^(.*?)\s*[x×*]\s*(\d+)$", s, re.I)
+        m = re.match(r"^(.*?)\s*[x×]\s*(\d+)$", s, re.I)
         if m and m.group(1).strip():
             s, qty = m.group(1).strip(), m.group(2)
         s = re.sub(r"^([A-Z]{2})\s*(\d)", r"\1 \2", s.upper())
-        out.append((s, qty))
+        out.append((s, qty, short))
     return out
 
 
 def entries_text(items: pd.DataFrame) -> str:
-    return "\n".join(f"{r} x{q}" if q else r for r, q in zip(items["recipe"], items["qty"]))
+    return "\n".join((f"{r} x{q}" if q else r) + (" *" if truthy(sh) else "")
+                     for r, q, sh in zip(items["recipe"], items["qty"], items["short"]))
 
 
 def allowed_lines(spec) -> list[str]:
@@ -200,6 +211,25 @@ def is_tv() -> bool:
     return str(st.query_params.get("tv", "")).lower() in ("1", "true", "yes")
 
 
+def not_ready_reasons(line: str) -> list[str]:
+    return NOT_READY_COOK if line in COOK_AREAS else NOT_READY_LINES
+
+
+def end_reasons(line: str) -> list[str]:
+    return END_REASONS_COOK if line in COOK_AREAS else END_REASONS
+
+
+def canon(reason: str, options: list[str]) -> str:
+    """Match an older spelling (e.g. 'No Staff') to today's option ('No staff')."""
+    r = str(reason or "").strip()
+    return next((o for o in options if o.lower() == r.lower()), r)
+
+
+def with_current(options: list[str], current: str) -> list[str]:
+    """Keep a reason saved under an older list selectable, so nothing breaks or gets lost."""
+    return options + [current] if current and current not in options else options
+
+
 # ── Language (per device: English / Español) ───────────────────────────────────
 # Stored data (statuses, reasons, line names in the sheet) stays in English; only what's shown is translated.
 # To change a Spanish wording, edit it here.
@@ -214,6 +244,15 @@ ES = {
     "No material": "Sin material", "No reason given": "Sin razón",
     "No Material": "Sin material", "No Staff": "Sin personal", "Mechanical Issues": "Problemas mecánicos",
     "Not Scheduled": "No programada",
+    "No food": "Sin comida", "Mixing working on it": "Mezclado trabajando en ello",
+    "Mixing waiting for product": "Mezclado esperando producto", "No carts": "Sin carritos",
+    "Low temperatures": "Temperaturas bajas", "High temperatures": "Temperaturas altas", "No totes": "Sin totes",
+    "No wet mix": "Sin mezcla húmeda", "No dry spice": "Sin especias secas", "No staff": "Sin personal",
+    "Not scheduled": "No programada", "Finished schedule": "Terminó lo programado",
+    # floor feed
+    "✕ Line down": "✕ Línea parada", "↪ carried over": "↪ pasada al siguiente turno",
+    "No comments yet this shift": "Todavía no hay comentarios en este turno",
+    "{n} this shift": "{n} en este turno",
     # default goals
     "Pounds": "Libras", "Units": "Unidades", "Units Per Hour": "Unidades por hora", "Cases Per Day": "Cajas por día",
     # board
@@ -305,10 +344,12 @@ ES = {
         "El registro del turno anterior se conserva y cada receta quitada queda en el registro de actividad.",
     "🗑️ Yes, clear it": "🗑️ Sí, borrar", "The board is already blank.": "El tablero ya está en blanco.",
     "{slot} cleared — {n} recipes removed": "{slot} borrado — {n} recetas quitadas",
-    "One recipe per row (or comma-separated), in run order. Add `x6` for batches. To mark a line down, pick its reason "
+    "One recipe per row (or comma-separated), in run order. Add `x6` for batches. Add `*` after a recipe to put it on "
+    "the **short sheet** (e.g. `PO 379 *`); remove the `*` to take it off. To mark a line down, pick its reason "
     "in the box under it (leave it on *Running* otherwise). Recipes already on the board (including ones carried over "
     "from last shift) keep their status when you save.":
-        "Una receta por renglón (o separadas por coma), en orden de corrida. Agrega `x6` para baches. Para marcar una "
+        "Una receta por renglón (o separadas por coma), en orden de corrida. Agrega `x6` para baches. Agrega `*` después "
+        "de una receta para ponerla en el **short sheet** (ej. `PO 379 *`); quita el `*` para sacarla. Para marcar una "
         "línea parada, elige la razón en la caja de abajo (déjala en *Corriendo* si no). Las recetas que ya están en el "
         "tablero (incluyendo las del turno anterior) conservan su estado al guardar.",
     "Line down?": "¿Línea parada?", "Priority lines": "Líneas prioritarias",
@@ -325,6 +366,7 @@ ES = {
     "Why recipes didn't finish (carry-over reasons)": "Por qué no se terminaron (razones)",
     "Everything planned was finished. 🎉": "Todo lo planeado se terminó. 🎉", "Everything planned was finished.": "Todo lo planeado se terminó.",
     "Recipes": "Recetas", "Finish rate by line": "% terminado por línea", "Finish %": "% terminado", "By shift": "Por turno",
+    "Short sheet": "Short sheet", "SS {a}/{b} short sheet done": "SS {a}/{b} short sheet terminadas",
     "Planned": "Planeadas", "Line": "Línea", "#": "#", "Recipe": "Receta", "Qty": "Cant.", "Carried over": "Pasada",
     "Started": "Inició", "Run (min)": "Duración (min)", "Last update by": "Última actualización por", "Yes": "Sí",
     "⬇ Download recipes (CSV)": "⬇ Descargar recetas (CSV)", "Activity log (every status change)": "Registro de actividad (cada cambio)",
@@ -525,15 +567,15 @@ class MemoryStore:
 
 
 DEMO_BOARD = {  # from the whiteboard photo
-    "L1": ["DI 354", "DI 153"], "L2": ["PO 379", "CS 131", "CS 04", "PO 380"],
+    "L1": ["DI 354", "DI 153"], "L2": ["PO 379", "CS 131", "CS 04", "PO 380 *"],
     "L4": ["CS 38", "MA 157", "MA 129", "PO 329"],
     "L7": ["PO 294", "PO 242", "PO 244", "PO 241", "MA 173"],
     "L8": ["PO 294", "PO 302", "MA 118", "CS 117", "PO 439", "CS 118", "PO 349"],
-    "L9": ["CS 38", "PA 158", "PO 297", "PO 418", "PT 209", "CH 95", "SA 40", "SA 70"],
+    "L9": ["CS 38", "PA 158", "PO 297 *", "PO 418 *", "PT 209", "CH 95", "SA 40", "SA 70"],
     "L11": ["PO 253", "PO 460", "MA 157", "PO 219"], "L13": ["MA 161", "MA 157", "VE 103"],
-    "L14": ["MA 137", "PO 416", "MA 120", "PT 245", "PT 197", "PO 430", "PT 469"],
+    "L14": ["MA 137", "PO 416", "MA 120", "PT 245 *", "PT 197", "PO 430", "PT 469"],
     "L15": ["PO 250", "PO 256"], "L16": ["DI 117", "DI 119"], "L19": ["MO 54", "VE 149", "PR 148"],
-    "CS": ["CS 131 x6", "CS 04 x17", "CS 38 x16", "DICE", "WENDY"],
+    "CS": ["CS 131 x6", "CS 04 x17 *", "CS 38 x16", "DICE", "WENDY"],
     "C1": ["CI 70", "CI 65"], "C2": ["CI 39"], "VX": ["CI 86", "CI 37"],
 }
 DEMO_PROGRESS = {"L2": 2, "L4": 1, "L7": 3, "L8": 2, "L9": 2, "L14": 3, "CS": 1, "C1": 1, "L11": 1, "L16": 1}
@@ -550,12 +592,12 @@ def demo_store() -> MemoryStore:
     rows, minute = [], 200
     for line, recs in DEMO_BOARD.items():
         done = DEMO_PROGRESS.get(line, -1)
-        for seq, (rec, qty) in enumerate(parse_entries("\n".join(recs)), 1):
+        for seq, (rec, qty, short) in enumerate(parse_entries("\n".join(recs)), 1):
             status = ("Finished" if seq <= done else "Running" if seq == done + 1 else
                       "Next" if seq == done + 2 else "Ready") if done >= 0 else "Ready"
             reason = comment = ""
             if line == "L9" and rec == "PO 418":
-                status, reason, comment = "Not ready", "No material", "Waiting on material"
+                status, reason, comment = "Not ready", "No food", "Waiting on material"
             if line == "L11" and rec == "PO 219":
                 comment = "Out of box lids"
             upd = start
@@ -565,16 +607,28 @@ def demo_store() -> MemoryStore:
             rows.append([uuid.uuid4().hex[:10], d.isoformat(), shift, line, seq, rec, qty, status, reason, comment,
                          False, "Demo Planner", start, "Demo Lead" if upd != start else "Demo Planner", upd,
                          upd if status in ("Running", "Finished") else "", upd if status == "Finished" else "",
-                         "", ""])
+                         "", "", short])
     s.ensure(sched_tab(d), SCHED_COLS, seed=rows)
     s.ensure("leads", LEAD_COLS, seed=[["Demo Lead", "1111", "lead", "ALL", True],
                                        ["Demo Planner", "2222", "planner", "ALL", True]])
     s.ensure("goals", GOAL_COLS, seed=DEFAULT_GOALS)
     s.ensure("lineday", LINEDAY_COLS, seed=[
         [line_key(d, shift, ln), d.isoformat(), shift, ln, ln in ("L17", "L18"), ln == "L9", "Demo Planner", start,
-         {"L17": "Not Scheduled", "L18": "Mechanical Issues"}.get(ln, "")]
+         {"L17": "Not scheduled", "L18": "Mechanical issues"}.get(ln, "")]
         for ln in ("L9", "L17", "L18")])
     s.ensure("boards", BOARD_COLS, seed=[[board_key(d, shift), d.isoformat(), shift, DEMO_NOTES, "Demo Planner", start]])
+    by_rec = {(r[3], r[5]): r[0] for r in rows}  # (line, recipe) -> id
+
+    def lg(mins, line, rec, action, to, reason, comment, who="Demo Lead"):
+        return [ts(mins), d.isoformat(), shift, line, by_rec.get((line, rec), ""), rec, action, "", to, reason, comment, who]
+    s.ensure(log_tab(d), LOG_COLS, seed=[
+        lg(230, "L17", "", "line down", "", "Not scheduled", "", "Demo Planner"),
+        lg(150, "L18", "", "line down", "", "Mechanical issues", ""),
+        lg(120, "L9", "PO 418", "status", "Not ready", "Mixing working on it", "Mixing says 30 min"),
+        lg(95, "C1", "CI 65", "note", "", "", "Kettle 2 slow to heat, watching it"),
+        lg(70, "L11", "PO 219", "note", "", "", "Out of box lids"),
+        lg(40, "L9", "PO 418", "note", "", "No food", "Waiting on material"),
+    ])
     return s
 
 
@@ -628,7 +682,7 @@ def load_sched(month: str) -> pd.DataFrame:
     return to_df(store().read([name]).get(name, []), SCHED_COLS)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=CACHE_SECONDS, show_spinner=False)
 def load_log(month: str) -> pd.DataFrame:
     name = f"log_{month}"
     return to_df(store().read([name]).get(name, []), LOG_COLS)
@@ -784,11 +838,12 @@ def move_item(item: dict, to_line: str, first: bool, target: pd.DataFrame, user:
     return True
 
 
-def new_item(d: date, shift: str, line: str, seq: int, recipe: str, qty: str, user: str, t: str) -> dict:
+def new_item(d: date, shift: str, line: str, seq: int, recipe: str, qty: str, user: str, t: str,
+             short: bool = False) -> dict:
     return {"id": uuid.uuid4().hex[:10], "date": d.isoformat(), "shift": shift, "line": line, "seq": seq,
             "recipe": recipe, "qty": qty, "status": "Ready", "reason": "", "comment": "", "deleted": False,
             "created_by": user, "created_at": t, "updated_by": user, "updated_at": t,
-            "started_at": "", "finished_at": "", "carried": False, "carried_from": ""}
+            "started_at": "", "finished_at": "", "carried": False, "carried_from": "", "short": bool(short)}
 
 
 def add_items(d: date, shift: str, line: str, entries, user: str, start_seq: int) -> bool:
@@ -796,7 +851,8 @@ def add_items(d: date, shift: str, line: str, entries, user: str, start_seq: int
     tab = sched_tab(d)
     s.ensure(tab, SCHED_COLS)
     t = stamp()
-    rows = [new_item(d, shift, line, start_seq + i, rec, qty, user, t) for i, (rec, qty) in enumerate(entries)]
+    rows = [new_item(d, shift, line, start_seq + i, rec, qty, user, t, short)
+            for i, (rec, qty, short) in enumerate(entries)]
     s.append(tab, [[r[c] for c in SCHED_COLS] for r in rows])
     write_logs([item_log(r, "added", user, from_status="") for r in rows])
     refresh()
@@ -815,7 +871,7 @@ def save_plan(d: date, shift: str, plan: dict, current: pd.DataFrame, user: str)
     for line, entries in plan.items():
         existing = current[current["line"] == line].to_dict("records") if not current.empty else []
         used = set()
-        for seq, (rec, qty) in enumerate(entries, 1):
+        for seq, (rec, qty, short) in enumerate(entries, 1):
             m = next((e for e in existing if e["id"] not in used and e["recipe"].strip().upper() == rec), None)
             if m:
                 used.add(m["id"])
@@ -824,8 +880,10 @@ def save_plan(d: date, shift: str, plan: dict, current: pd.DataFrame, user: str)
                     cells.append((r, col["seq"], seq))
                 if r and str(m["qty"]) != str(qty):
                     cells.append((r, col["qty"], qty))
+                if r and truthy(m.get("short")) != short:
+                    cells.append((r, col["short"], short))
             else:
-                row = new_item(d, shift, line, seq, rec, qty, user, t)
+                row = new_item(d, shift, line, seq, rec, qty, user, t, short)
                 new_rows.append(row)
                 logs.append(item_log(row, "planned", user, from_status=""))
         for e in existing:
@@ -884,7 +942,7 @@ def carry_over(d: date, shift: str, items: pd.DataFrame, answers: dict, user: st
             if r:
                 src_cells += [(r, col["reason"], reason), (r, col["comment"], comment), (r, col["carried"], True)]
             logs.append(item_log(it, "carried over", user, reason=reason, comment=comment))
-            row = new_item(nd, ns, line, seq, it["recipe"], it["qty"], user, t)
+            row = new_item(nd, ns, line, seq, it["recipe"], it["qty"], user, t, truthy(it.get("short")))
             row.update(status=it["status"], reason=reason, comment=comment, carried_from=it["id"],
                        started_at=t if it["status"] == "Running" else "")
             new_rows.append(row)
@@ -896,7 +954,7 @@ def carry_over(d: date, shift: str, items: pd.DataFrame, answers: dict, user: st
     core = load_core()
     flags, nflags = line_flags(core["lineday"], d, shift), line_flags(core["lineday"], nd, ns)
     desired = {**{ln: f for ln, f in flags.items()}, **nflags}
-    save_flags(nd, ns, desired, nflags, user)
+    save_flags(nd, ns, desired, nflags, user, log=False)
     notes, nrow = board_notes(core["boards"], d, shift), board_row(core["boards"], nd, ns)
     rows = [{"key": board_key(d, shift), "date": d.isoformat(), "shift": shift, "closed_by": user, "closed_at": t,
              "carried_count": int(str(board_row(core["boards"], d, shift).get("carried_count") or 0) or 0) + len(new_rows)}]
@@ -908,8 +966,8 @@ def carry_over(d: date, shift: str, items: pd.DataFrame, answers: dict, user: st
     return len(new_rows), nd, ns
 
 
-def save_flags(d: date, shift: str, desired: dict, current: dict, user: str) -> bool:
-    rows = []
+def save_flags(d: date, shift: str, desired: dict, current: dict, user: str, log: bool = True) -> bool:
+    rows, logs = [], []
     for line in LINE_IDS:
         want, have = desired.get(line, {}), current.get(line, {})
         reason = (want.get("down_reason") or "") if want.get("down") else ""
@@ -917,7 +975,13 @@ def save_flags(d: date, shift: str, desired: dict, current: dict, user: str) -> 
             rows.append({"key": line_key(d, shift, line), "date": d.isoformat(), "shift": shift, "line": line,
                          **{k: bool(want.get(k)) for k in FLAG_KEYS}, "down_reason": reason,
                          "updated_by": user, "updated_at": stamp()})
+            if log and want.get("down") and reason and reason != (have.get("down_reason") or ""):
+                logs.append({"ts": stamp(), "date": d.isoformat(), "shift": shift, "line": line, "item_id": "",
+                             "recipe": "", "action": "line down", "from_status": "", "to_status": "",
+                             "reason": reason, "comment": "", "user": user})
     upsert("lineday", LINEDAY_COLS, rows)
+    if logs:
+        write_logs(logs)
     return True
 
 
@@ -999,6 +1063,9 @@ BOARD_CSS = """<style>
 .item .tag{font-size:8.5px;font-weight:800;letter-spacing:.05em;white-space:nowrap}
 .item.s-running{box-shadow:0 0 0 2px rgba(24,128,56,.28)}
 .item.s-finished .rec{text-decoration:line-through}
+.item.ss{border:2.5px dashed #6d28d9!important}
+.ssb{display:inline-block;background:#6d28d9;color:#fff;font-size:9px;font-weight:800;letter-spacing:.04em;
+ border-radius:3px;padding:1px 4px;margin-right:5px;vertical-align:2px;text-decoration:none}
 .qty{font-weight:600;opacity:.8}
 .cmt{font-size:11px;color:#5f6b7a;margin:2px 0 0 3px;line-height:1.25}
 .cmt b{color:#a50e0e}
@@ -1012,6 +1079,9 @@ BOARD_CSS = """<style>
 .feed div{font-size:13px;padding:3px 0;border-bottom:1px solid #f0f2f5}
 .feed time{color:#5f6b7a;font-variant-numeric:tabular-nums;margin-right:6px}
 .feed .who{color:#8a94a3}
+.feed .why{color:#a50e0e}
+.feed-list{max-height:290px;overflow-y:auto;overscroll-behavior:contain;padding-right:4px}
+.sb.tv .feed-list{overflow:hidden}
 .legend{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .legend span{font-size:11px;font-weight:700;border:1.5px solid;border-radius:5px;padding:1px 6px}
 .sb.tv .item{font-size:17px}.sb.tv .lbl{font-size:14px}.sb.tv .sb-title{font-size:28px}.sb.tv .cmt{font-size:12.5px}
@@ -1044,8 +1114,11 @@ def _card(line: str, items: pd.DataFrame, flags: dict) -> str:
         status = it["status"] if it["status"] in STATUS_STYLE else "Ready"
         bg, bd, fg, tag = STATUS_STYLE[status]
         qty = f' <span class="qty">×{e(it["qty"])}</span>' if it["qty"] else ""
-        out.append(f'<div class="item s-{status.lower().replace(" ", "-")}" style="background:{bg};border-color:{bd};color:{fg}">'
-                   f'<span class="rec">{e(it["recipe"])}{qty}</span><span class="tag">{_(tag)}{" ↪" if truthy(it["carried"]) else ""}</span></div>')
+        short = truthy(it.get("short"))
+        out.append(f'<div class="item s-{status.lower().replace(" ", "-")}{" ss" if short else ""}" '
+                   f'style="background:{bg};border-color:{bd};color:{fg}">'
+                   f'<span class="rec">{"<span class=ssb>SS</span>" if short else ""}{e(it["recipe"])}{qty}</span>'
+                   f'<span class="tag">{_(tag)}{" ↪" if truthy(it["carried"]) else ""}</span></div>')
         sub = ([f"<b>{e(_(it['reason']))}</b>"] if it["reason"] else []) + ([e(it["comment"])] if it["comment"] else [])
         if sub:
             out.append(f'<div class="cmt">{" · ".join(sub)}</div>')
@@ -1055,8 +1128,19 @@ def _card(line: str, items: pd.DataFrame, flags: dict) -> str:
     return "".join(out)
 
 
+def floor_feed(log: pd.DataFrame, d: date, shift: str) -> list[dict]:
+    """Every reason / comment of the shift from the activity log, newest first. Plain status changes are left out."""
+    if log.empty:
+        return []
+    lg = log[(log["date"] == d.isoformat()) & (log["shift"] == shift)]
+    has_text = (lg["reason"].str.strip() != "") | (lg["comment"].str.strip() != "")
+    keep = (((lg["action"] == "note") & has_text) | ((lg["action"] == "status") & (lg["to_status"] == "Not ready"))
+            | lg["action"].isin(["carried over", "line down"]))
+    return lg[keep].sort_values("ts", ascending=False).to_dict("records")
+
+
 def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: str, goals: pd.DataFrame, tv: bool,
-                 closed: str = "", alert: str = "") -> str:
+                 closed: str = "", alert: str = "", feed_rows: list | None = None) -> str:
     e = html.escape
     st_counts = items["status"].value_counts() if not items.empty else pd.Series(dtype=int)
     total = len(items)
@@ -1070,6 +1154,11 @@ def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: s
     if downs:
         kpi_html += (f'<span class="kpi" style="background:#f1f3f6;border-color:#9aa3ae;color:#4b5563">'
                      f'{_("✕ {n} lines down" if downs > 1 else "✕ {n} line down", n=downs)}</span>')
+    ss_items = items[items["short"].map(truthy)] if not items.empty else items
+    if len(ss_items):
+        ss_done = int((ss_items["status"] == "Finished").sum())
+        kpi_html += (f'<span class="kpi" style="background:#f3efff;border:1.5px dashed #6d28d9;color:#5b21b6">'
+                     f'{_("SS {a}/{b} short sheet done", a=ss_done, b=len(ss_items))}</span>')
     if closed:
         kpi_html += f'<span class="kpi" style="background:#1f2a37;border-color:#1f2a37;color:#fff">↪ {e(closed)}</span>'
     if alert:
@@ -1080,15 +1169,23 @@ def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: s
     side = "".join(_card(ln, items, flags) for ln in SIDE_LINES) + \
         f'<div class="panel"><div class="ph">{_("Daily goals")}</div>{goal_rows}</div>'
 
-    feed_items = items[(items["updated_at"] != items["created_at"])] if not items.empty else items
-    feed_items = feed_items.sort_values("updated_at", ascending=False).head(10) if not feed_items.empty else feed_items
-    feed = "".join(
-        f'<div><time>{e(r["updated_at"][11:16])}</time><b>{e(line_name(r["line"]))}</b> · '
-        f'{e(r["recipe"])} → {ICON.get(r["status"], "")} {e(_(r["status"]))}'
-        f'{" — " + e(r["comment"]) if r["comment"] else ""} <span class="who">({e(r["updated_by"])})</span></div>'
-        for r in feed_items.to_dict("records")) or f'<div class="empty" style="padding:6px 0">{_("No updates yet")}</div>'
+    def feed_row(r: dict) -> str:
+        if r["action"] == "line down":
+            what = f'{_("✕ Line down")}: <b class="why">{e(_(r["reason"]))}</b>'
+        else:
+            what = e(r["recipe"]) + (f' <b class="why">{e(_(r["reason"]))}</b>' if r["reason"] else "") \
+                + (f' — {e(r["comment"])}' if r["comment"] else "") \
+                + (f' <span class="who">{_("↪ carried over")}</span>' if r["action"] == "carried over" else "")
+        return (f'<div><time>{e(r["ts"][11:16])}</time><b>{e(line_name(r["line"]))}</b> · {what} '
+                f'<span class="who">({e(r["user"])})</span></div>')
+
+    feed_rows = feed_rows or []
+    feed = "".join(feed_row(r) for r in feed_rows) or \
+        f'<div class="empty" style="padding:6px 0">{_("No comments yet this shift")}</div>'
+    feed_count = f' <span class="cnt">· {_("{n} this shift", n=len(feed_rows))}</span>' if feed_rows else ""
     legend = "".join(f'<span style="background:{STATUS_STYLE[s][0]};border-color:{STATUS_STYLE[s][1]};'
-                     f'color:{STATUS_STYLE[s][2]}">{_(s)}</span>' for s in STATUSES)
+                     f'color:{STATUS_STYLE[s][2]}">{_(s)}</span>' for s in STATUSES) + \
+        f'<span style="background:#fff;border:2px dashed #6d28d9;color:#5b21b6"><span class="ssb">SS</span>{_("Short sheet")}</span>'
 
     return (f'{BOARD_CSS}<div class="sb{" tv" if tv else ""}">'
             f'<div class="sb-head"><div class="sb-title">{_("Schedule Board")}<span>{e(slot_label(d, shift))}</span></div>'
@@ -1098,7 +1195,8 @@ def render_board(d: date, shift: str, items: pd.DataFrame, flags: dict, notes: s
             f'<div class="sb-side">{side}</div></div>'
             f'<div class="sb-foot"><div class="panel"><div class="ph">{_("Notes")}</div><div class="notes">{e(notes) or "—"}</div>'
             f'<div class="legend">{legend}</div></div>'
-            f'<div class="panel feed"><div class="ph">{_("Latest from the floor")}</div>{feed}</div></div></div>')
+            f'<div class="panel feed"><div class="ph">{_("Latest from the floor")}{feed_count}</div>'
+            f'<div class="feed-list">{feed}</div></div></div></div>')
 
 
 # ── Shared UI pieces ───────────────────────────────────────────────────────────
@@ -1215,7 +1313,8 @@ def live_board(d: date | None, shift: str | None, tv: bool) -> None:
     r = close_reminder(core)
     st.html(render_board(d, shift, board_items(sched, d, shift), line_flags(core["lineday"], d, shift),
                          board_notes(core["boards"], d, shift), core["goals"], tv,
-                         closed_text(board_row(core["boards"], d, shift)), reminder_text(r) if r else ""))
+                         closed_text(board_row(core["boards"], d, shift)), reminder_text(r) if r else "",
+                         floor_feed(load_log(mk(d)), d, shift)))
 
 
 def board_page() -> None:
@@ -1267,7 +1366,8 @@ def _notready_body() -> None:
         return
     it = p["item"]
     st.markdown(f"**{line_name(it['line'])} · {it['recipe']}**")
-    reason = st.selectbox(_("Reason (required)"), REASONS, index=None, placeholder=_("Pick a reason"), format_func=_)
+    reason = st.selectbox(_("Reason (required)"), not_ready_reasons(it["line"]), index=None,
+                          placeholder=_("Pick a reason"), format_func=_)
     comment = st.text_area(_("Comment (optional)"), it["comment"], height=80)
     c1, c2 = st.columns(2)
     if c1.button(_("Save"), type="primary", width="stretch"):
@@ -1329,7 +1429,8 @@ def _down_body() -> None:
 
 def item_row(it: dict, user: str, items: pd.DataFrame) -> None:
     c1, c3, c4 = st.columns([4, 1.5, 1.1], vertical_alignment="center")
-    c1.markdown(f"**{it['recipe']}**" + (f" ×{it['qty']}" if it["qty"] else "") + (" ↪" if truthy(it["carried"]) else ""))
+    c1.markdown((f":violet-badge[{_('Short sheet')}] " if truthy(it.get("short")) else "") + f"**{it['recipe']}**"
+                + (f" ×{it['qty']}" if it["qty"] else "") + (" ↪" if truthy(it["carried"]) else ""))
     sub = " · ".join(x for x in (_(it["reason"]) if it["reason"] else "", it["comment"]) if x)
     if sub:
         c1.caption(sub)
@@ -1344,7 +1445,10 @@ def item_row(it: dict, user: str, items: pd.DataFrame) -> None:
     with c3.popover(_("💬 Comments"), help=_("Reason and comment — carried to the next shift")):
         with st.form(f"note_{it['id']}_{it['updated_at']}", border=False):
             st.markdown(_("**Comments · {r}**", r=it["recipe"]))
-            reason = st.selectbox(_("Reason"), REASONS, index=REASONS.index(it["reason"]) if it["reason"] in REASONS else None,
+            base = not_ready_reasons(it["line"]) if it["status"] == "Not ready" else end_reasons(it["line"])
+            cur = canon(it["reason"], base)
+            opts = with_current(base, cur)
+            reason = st.selectbox(_("Reason"), opts, index=opts.index(cur) if cur in opts else None,
                                   placeholder=_("Pick a reason"), format_func=_)
             comment = st.text_area(_("Comment"), it["comment"], height=80, placeholder=_("What happened, what's needed…"))
             if st.form_submit_button(_("Save"), type="primary"):
@@ -1397,8 +1501,9 @@ def _carryover_body(d: date, shift: str, user: str) -> None:
             for it in li.to_dict("records"):
                 c1, c2, c3 = st.columns([1.6, 2, 3], vertical_alignment="center")
                 c1.markdown(f"{ICON.get(it['status'], '')} {it['recipe']}" + (f" ×{it['qty']}" if it["qty"] else ""))
-                c2.selectbox(_("Reason"), REASONS, key=f"co_r_{it['id']}", label_visibility="collapsed",
-                             index=REASONS.index(it["reason"]) if it["reason"] in REASONS else None,
+                opts, cur = end_reasons(it["line"]), canon(it["reason"], end_reasons(it["line"]))
+                c2.selectbox(_("Reason"), opts, key=f"co_r_{it['id']}", label_visibility="collapsed",
+                             index=opts.index(cur) if cur in opts else None,
                              placeholder=_("Reason (required)"), format_func=_)
                 c3.text_input(_("Comment"), it["comment"], key=f"co_c_{it['id']}", label_visibility="collapsed",
                               placeholder=_("Comment (optional)"))
@@ -1557,7 +1662,8 @@ def fill_plan(tag: str, items: pd.DataFrame, flags: dict, notes: str, overwrite:
     values[f"plan_{tag}_priority"] = [ln for ln in LINE_IDS if flags.get(ln, {}).get("priority")]
     for ln in LINE_IDS:
         f = flags.get(ln, {})
-        values[f"plan_{tag}_down_{ln}"] = (f.get("down_reason") or DOWN_REASONS[0]) if copy_down and f.get("down") else None
+        values[f"plan_{tag}_down_{ln}"] = (canon(f.get("down_reason"), DOWN_REASONS) or DOWN_REASONS[0]) \
+            if copy_down and f.get("down") else None
     values[f"plan_{tag}_notes"] = notes
     for k, v in values.items():
         if overwrite or k not in ss:
@@ -1631,6 +1737,7 @@ def plan_page() -> None:
 
     with st.form(f"plan_form_{tag}"):
         st.caption(_("One recipe per row (or comma-separated), in run order. Add `x6` for batches. "
+                     "Add `*` after a recipe to put it on the **short sheet** (e.g. `PO 379 *`); remove the `*` to take it off. "
                      "To mark a line down, pick its reason in the box under it (leave it on *Running* otherwise). "
                      "Recipes already on the board (including ones carried over from last shift) keep their "
                      "status when you save."))
@@ -1639,7 +1746,8 @@ def plan_page() -> None:
                 cols = st.columns(5)
                 for c, line in zip(cols, group[i:i + 5]):
                     c.text_area(line_name(line), key=f"plan_{tag}_{line}", height=150)
-                    c.selectbox(_("Line down?"), DOWN_REASONS, key=f"plan_{tag}_down_{line}", index=None,
+                    c.selectbox(_("Line down?"), with_current(DOWN_REASONS, st.session_state.get(f"plan_{tag}_down_{line}")),
+                                key=f"plan_{tag}_down_{line}", index=None,
                                 placeholder=_("Running"), label_visibility="collapsed", format_func=_)
                     li = items[items["line"] == line] if not items.empty else items
                     started = [f"{ICON[s]} {r}" for r, s in zip(li["recipe"], li["status"]) if s in ICON and s != "Ready"]
@@ -1809,10 +1917,12 @@ def history_page() -> None:
 
     st.markdown(f"**{_('Recipes')}**")
     cols = {"date": "Date", "shift": "Shift", "Line": "Line", "seq": "#", "recipe": "Recipe", "qty": "Qty",
-            "status": "Status", "reason": "Reason", "comment": "Comment", "carried": "Carried over", "started_at": "Started",
+            "short": "Short sheet", "status": "Status", "reason": "Reason", "comment": "Comment", "carried": "Carried over",
+            "started_at": "Started",
             "finished_at": "Finished", "run_min": "Run (min)", "updated_by": "Last update by"}
     out = df.sort_values(["date", "shift", "line", "seq"])[list(cols)].copy()
     out["shift"] = out["shift"].map(shift_name)
+    out["short"] = out["short"].map(lambda x: _("Yes") if truthy(x) else "")
     out["status"] = out["status"].map(lambda v: _(v) if v else v)
     out["reason"] = out["reason"].map(lambda v: _(v) if v else v)
     out = out.rename(columns={k: _(v) for k, v in cols.items()})
