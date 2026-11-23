@@ -256,6 +256,11 @@ ES = {
     "No wet mix": "Sin mezcla húmeda", "No dry spice": "Sin especias secas", "No staff": "Sin personal",
     "Not scheduled": "No programada", "Finished schedule": "Terminó lo programado",
     # floor feed
+    "✏️ Edit": "✏️ Editar", "Change the recipe name or delete it": "Cambiar el nombre de la receta o borrarla",
+    "**Edit {r}**": "**Editar {r}**", "Same as when adding: `x6` for batches, `*` for short sheet":
+        "Igual que al agregar: `x6` para baches, `*` para short sheet", "Yes, delete this recipe": "Sí, borrar esta receta",
+    "🗑️ Delete": "🗑️ Borrar", "Type one recipe.": "Escribe una sola receta.", "{r} updated": "{r} actualizada",
+    "Tick the box to confirm.": "Marca la casilla para confirmar.", "{r} deleted": "{r} borrada",
     "✕ Line down": "✕ Línea parada", "✓ Resolved": "✓ Resuelto", "✓ resolved": "✓ resuelto",
     "{r}: resolved": "{r}: resuelto",
     "Clear the reason and comment from the board — it stays in Latest from the floor":
@@ -1443,7 +1448,7 @@ def _down_body() -> None:
 
 
 def item_row(it: dict, user: str, items: pd.DataFrame) -> None:
-    c1, c3, c4 = st.columns([4, 1.5, 1.1], vertical_alignment="center")
+    c1, c3, c4, c5 = st.columns([3.6, 1.5, 1.1, 1], vertical_alignment="center")
     c1.markdown((f":violet-badge[{_('Short sheet')}] " if truthy(it.get("short")) else "") + f"**{it['recipe']}**"
                 + (f" ×{it['qty']}" if it["qty"] else "") + (" ↪" if truthy(it["carried"]) else ""))
     sub = " · ".join(x for x in (_(it["reason"]) if it["reason"] else "", it["comment"]) if x)
@@ -1494,6 +1499,33 @@ def item_row(it: dict, user: str, items: pd.DataFrame) -> None:
                     return
                 if safe(move_item, it, to, first, items[items["line"] == to], user):
                     flash(_("{r} moved to {line}", r=it["recipe"], line=line_name(to)))
+                st.rerun()
+    with c5.popover(_("✏️ Edit"), help=_("Change the recipe name or delete it")):
+        with st.form(f"edit_{it['id']}_{it['updated_at']}", border=False):
+            st.markdown(_("**Edit {r}**", r=it["recipe"]))
+            current = (f"{it['recipe']} x{it['qty']}" if it["qty"] else it["recipe"]) + (" *" if truthy(it.get("short")) else "")
+            text = st.text_input(_("Recipe"), current, help=_("Same as when adding: `x6` for batches, `*` for short sheet"))
+            sure = st.checkbox(_("Yes, delete this recipe"))
+            b1, b2 = st.columns(2)
+            save = b1.form_submit_button(_("Save"), type="primary")
+            delete = b2.form_submit_button(_("🗑️ Delete"))
+            if save:
+                parsed = parse_entries(text)
+                if len(parsed) != 1:
+                    st.error(_("Type one recipe."))
+                    return
+                rec, qty, short = parsed[0]
+                ch = {k: v for k, v in (("recipe", rec), ("qty", qty), ("short", short))
+                      if str(v) != str(it.get(k, "")) and not (k == "short" and truthy(it.get(k)) == v)}
+                if ch and safe(update_item, it, ch, user, f"edited (was {it['recipe']})"):
+                    flash(_("{r} updated", r=rec))
+                st.rerun()
+            if delete:
+                if not sure:
+                    st.error(_("Tick the box to confirm."))
+                    return
+                if safe(update_item, it, {"deleted": True}, user, "deleted"):
+                    flash(_("{r} deleted", r=it["recipe"]))
                 st.rerun()
 
 
