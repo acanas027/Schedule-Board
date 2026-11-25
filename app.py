@@ -1276,7 +1276,7 @@ def make_token(name: str, pin, exp: int) -> str:
 def make_user(row, exp: int, token: str) -> dict:
     role = str(row["role"]).strip().lower() or "lead"
     return {"name": str(row["name"]).strip(), "role": role, "exp": exp, "token": token,
-            "lines": list(LINE_IDS) if role in PLANNER_ROLES else allowed_lines(row["lines"])}
+            "lines": allowed_lines(row["lines"])}  # Update page lines, for planners too (Plan page always has every line)
 
 
 def user_from_token(tok: str, leads: pd.DataFrame) -> dict | None:
